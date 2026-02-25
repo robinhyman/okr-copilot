@@ -1,0 +1,38 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: okr-copilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: okr
+      POSTGRES_PASSWORD: okr
+      POSTGRES_DB: okr_copilot
+    ports:
+      - '5432:5432'
+    volumes:
+      - okr_copilot_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U okr -d okr_copilot']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: okr-copilot-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - okr_copilot_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  okr_copilot_postgres_data:
+  okr_copilot_redis_data:
