@@ -32,6 +32,8 @@ export const env = {
   authStubEnabled: toBoolean(process.env.AUTH_STUB_ENABLED, true),
   authStubEmail: process.env.AUTH_STUB_EMAIL ?? 'robin@localhost',
   authStubDisplayName: process.env.AUTH_STUB_DISPLAY_NAME ?? 'Robin',
+  authStubToken: process.env.AUTH_STUB_TOKEN ?? 'dev-stub-token',
+  authGuardToken: process.env.AUTH_GUARD_TOKEN ?? '',
   whatsappProvider: process.env.WHATSAPP_PROVIDER ?? 'twilio',
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? '',

@@ -11,8 +11,8 @@ healthRouter.get('/health', (_req, res) => {
     llmRequired: false,
     dataResidency: env.dataResidency,
     dependencies: {
-      postgres: env.databaseUrl,
-      redis: env.redisUrl
+      postgres: { configured: Boolean(env.databaseUrl) },
+      redis: { configured: Boolean(env.redisUrl) }
     },
     timestamp: new Date().toISOString()
   });

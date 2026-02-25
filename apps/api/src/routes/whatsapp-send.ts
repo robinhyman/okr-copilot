@@ -1,10 +1,18 @@
 import { Router } from 'express';
 import { WhatsAppReminderService } from '../services/reminders/whatsapp-reminder.service.js';
 import { insertMessageEvent, listRecentMessageEvents } from '../data/message-events-repo.js';
+import { requireMutatingAuth } from '../middleware/auth-guard.js';
+import { createRateLimiter } from '../middleware/rate-limit.js';
 
 export const whatsappSendRouter = Router();
 
 const service = new WhatsAppReminderService();
+
+const sendTestRateLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 10,
+  keyPrefix: 'whatsapp-send-test'
+});
 
 whatsappSendRouter.get('/api/reminders/whatsapp/events', async (req, res) => {
   const limitRaw = req.query?.limit;
@@ -18,7 +26,7 @@ whatsappSendRouter.get('/api/reminders/whatsapp/events', async (req, res) => {
   }
 });
 
-whatsappSendRouter.post('/api/reminders/whatsapp/send-test', async (req, res) => {
+whatsappSendRouter.post('/api/reminders/whatsapp/send-test', requireMutatingAuth, sendTestRateLimiter, async (req, res) => {
   const to = req.body?.to;
   const message = req.body?.message;
 

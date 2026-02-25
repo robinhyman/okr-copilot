@@ -2,8 +2,15 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 import { insertMessageEvent } from '../data/message-events-repo.js';
+import { createRateLimiter } from '../middleware/rate-limit.js';
 
 export const whatsappWebhooksRouter = Router();
+
+const webhookRateLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 120,
+  keyPrefix: 'twilio-webhook'
+});
 
 function computeTwilioSignature(url: string, params: Record<string, unknown>, authToken: string): string {
   const sortedKeys = Object.keys(params).sort();
@@ -15,28 +22,40 @@ function computeTwilioSignature(url: string, params: Record<string, unknown>, au
   return crypto.createHmac('sha1', authToken).update(data).digest('base64');
 }
 
+function canonicalWebhookUrl(req: any): string {
+  if (env.twilioPublicBaseUrl) {
+    const base = env.twilioPublicBaseUrl.replace(/\/$/, '');
+    return `${base}${req.originalUrl}`;
+  }
+
+  const forwardedProto = req.header('x-forwarded-proto');
+  const host = req.header('host');
+  const protocol = forwardedProto ?? req.protocol ?? 'https';
+  return `${protocol}://${host}${req.originalUrl}`;
+}
+
 function isValidTwilioSignature(req: any): boolean {
   if (!env.twilioVerifySignature) return true;
+  if (!env.twilioAuthToken) return false;
 
   const signature = req.header('x-twilio-signature');
   if (!signature) return false;
 
-  // For Twilio, use public webhook URL and posted form fields.
-  const forwardedProto = req.header('x-forwarded-proto');
-  const host = req.header('host');
-  const protocol = forwardedProto ?? req.protocol ?? 'https';
-  const fullUrl = `${protocol}://${host}${req.originalUrl}`;
+  const fullUrl = canonicalWebhookUrl(req);
   const params = req.body && typeof req.body === 'object' ? req.body : {};
 
   const expected = computeTwilioSignature(fullUrl, params, env.twilioAuthToken);
   try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+    const expectedBuffer = Buffer.from(expected);
+    const signatureBuffer = Buffer.from(signature);
+    if (expectedBuffer.length !== signatureBuffer.length) return false;
+    return crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
   } catch {
     return false;
   }
 }
 
-whatsappWebhooksRouter.post('/api/reminders/whatsapp/inbound', async (req, res) => {
+whatsappWebhooksRouter.post('/api/reminders/whatsapp/inbound', webhookRateLimiter, async (req, res) => {
   console.log('[whatsapp.inbound.attempt]', {
     hasSignature: Boolean(req.header('x-twilio-signature')),
     path: req.path,
@@ -82,7 +101,7 @@ whatsappWebhooksRouter.post('/api/reminders/whatsapp/inbound', async (req, res) 
   return res.status(200).send('<Response></Response>');
 });
 
-whatsappWebhooksRouter.post('/api/reminders/whatsapp/status', async (req, res) => {
+whatsappWebhooksRouter.post('/api/reminders/whatsapp/status', webhookRateLimiter, async (req, res) => {
   console.log('[whatsapp.status.attempt]', {
     hasSignature: Boolean(req.header('x-twilio-signature')),
     path: req.path

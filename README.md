@@ -104,6 +104,7 @@ npm test
 # Send WhatsApp test message (Twilio)
 curl -sS -X POST http://localhost:4000/api/reminders/whatsapp/send-test \
   -H 'Content-Type: application/json' \
+  -H 'x-auth-stub-token: dev-stub-token' \
   -d '{"to":"whatsapp:+447841613919","message":"hello from okr-copilot"}'
 
 # View recent message events
@@ -112,10 +113,12 @@ curl -sS 'http://localhost:4000/api/reminders/whatsapp/events?limit=20' | jq
 # Create a due reminder (should send on next worker tick)
 curl -sS -X POST http://localhost:4000/api/reminders \
   -H 'Content-Type: application/json' \
+  -H 'x-auth-stub-token: dev-stub-token' \
   -d '{"recipient":"whatsapp:+447841613919","message":"Reminder test","dueAtIso":"2026-02-25T11:40:00Z"}'
 
 # Trigger reminder worker immediately
-curl -sS -X POST http://localhost:4000/api/reminders/run-due
+curl -sS -X POST http://localhost:4000/api/reminders/run-due \
+  -H 'x-auth-stub-token: dev-stub-token'
 ```
 
 ## Useful local commands

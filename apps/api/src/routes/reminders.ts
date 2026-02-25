@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { createReminder, listRecentReminders } from '../data/reminders-repo.js';
 import { runDueReminderCycle } from '../services/reminders/reminder-worker.js';
+import { requireMutatingAuth } from '../middleware/auth-guard.js';
 
 export const remindersRouter = Router();
 
@@ -16,7 +17,7 @@ remindersRouter.get('/api/reminders', async (req, res) => {
   }
 });
 
-remindersRouter.post('/api/reminders', async (req, res) => {
+remindersRouter.post('/api/reminders', requireMutatingAuth, async (req, res) => {
   const recipient = req.body?.recipient;
   const message = req.body?.message;
   const dueAtIso = req.body?.dueAtIso;
@@ -39,7 +40,7 @@ remindersRouter.post('/api/reminders', async (req, res) => {
   }
 });
 
-remindersRouter.post('/api/reminders/run-due', async (_req, res) => {
+remindersRouter.post('/api/reminders/run-due', requireMutatingAuth, async (_req, res) => {
   try {
     const result = await runDueReminderCycle(10);
     return res.status(200).json({ ok: true, ...result });
