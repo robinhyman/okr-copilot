@@ -40,11 +40,11 @@ function parseOkrPayload(body: any) {
 
 okrsRouter.post('/api/okrs/draft', async (req, res) => {
   try {
-    const draft = await draftProvider.generateDraft({
+    const result = await draftProvider.generateDraft({
       focusArea: req.body?.focusArea,
       timeframe: req.body?.timeframe
     });
-    return res.status(200).json({ ok: true, draft });
+    return res.status(200).json({ ok: true, draft: result.draft, metadata: result.metadata });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'draft_generation_failed' });
   }

@@ -41,6 +41,7 @@ test('draft -> save -> fetch -> check-in happy path', async () => {
   assert.equal(draftRes.status, 200);
   assert.equal(draftRes.body?.ok, true);
   assert.ok(draftRes.body?.draft?.keyResults?.length > 0);
+  assert.ok(['llm', 'fallback'].includes(draftRes.body?.metadata?.source));
 
   const createRes = await request(app)
     .post('/api/okrs')
@@ -82,4 +83,75 @@ test('draft -> save -> fetch -> check-in happy path', async () => {
   assert.equal(listRes.status, 200);
   assert.equal(listRes.body?.ok, true);
   assert.equal(listRes.body?.okrs?.[0]?.keyResults?.[0]?.current_value, 4);
+});
+
+test('draft falls back deterministically when OPENAI_API_KEY is missing', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const res = await request(app).post('/api/okrs/draft').send({
+      focusArea: 'Revenue operations',
+      timeframe: 'Q3 2026'
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.metadata?.source, 'fallback');
+    assert.equal(res.body?.metadata?.provider, 'deterministic');
+    assert.equal(res.body?.metadata?.reason, 'missing_openai_api_key');
+    assert.equal(res.body?.draft?.timeframe, 'Q3 2026');
+    assert.ok(Array.isArray(res.body?.draft?.keyResults));
+  } finally {
+    if (priorKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = priorKey;
+    }
+  }
+});
+
+test('draft falls back when LLM provider call fails', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  const priorBaseUrl = process.env.OPENAI_BASE_URL;
+  const priorTimeout = process.env.OKR_DRAFT_LLM_TIMEOUT_MS;
+
+  process.env.OPENAI_API_KEY = 'test-key';
+  process.env.OPENAI_BASE_URL = 'http://127.0.0.1:1/v1';
+  process.env.OKR_DRAFT_LLM_TIMEOUT_MS = '200';
+
+  try {
+    const app = createApp();
+    const res = await request(app).post('/api/okrs/draft').send({
+      focusArea: 'Delivery quality',
+      timeframe: 'Q4 2026'
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.metadata?.source, 'fallback');
+    assert.equal(res.body?.metadata?.provider, 'deterministic');
+    assert.ok(typeof res.body?.metadata?.reason === 'string');
+    assert.ok(Array.isArray(res.body?.draft?.keyResults));
+    assert.ok(res.body?.draft?.keyResults?.length > 0);
+  } finally {
+    if (priorKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = priorKey;
+    }
+
+    if (priorBaseUrl === undefined) {
+      delete process.env.OPENAI_BASE_URL;
+    } else {
+      process.env.OPENAI_BASE_URL = priorBaseUrl;
+    }
+
+    if (priorTimeout === undefined) {
+      delete process.env.OKR_DRAFT_LLM_TIMEOUT_MS;
+    } else {
+      process.env.OKR_DRAFT_LLM_TIMEOUT_MS = priorTimeout;
+    }
+  }
 });

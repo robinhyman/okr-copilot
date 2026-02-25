@@ -46,5 +46,9 @@ export const env = {
   twilioPublicBaseUrl: process.env.TWILIO_PUBLIC_BASE_URL ?? '',
   reminderWorkerEnabled: toBoolean(process.env.REMINDER_WORKER_ENABLED, true),
   reminderTickSeconds: toNumber(process.env.REMINDER_TICK_SECONDS, 30),
-  excelInputPath: process.env.EXCEL_INPUT_PATH ?? './data/sample-krs.xlsx'
+  excelInputPath: process.env.EXCEL_INPUT_PATH ?? './data/sample-krs.xlsx',
+  openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+  openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+  okrDraftLlmTimeoutMs: toNumber(process.env.OKR_DRAFT_LLM_TIMEOUT_MS, 5000),
+  okrDraftInputMaxChars: toNumber(process.env.OKR_DRAFT_INPUT_MAX_CHARS, 240)
 };

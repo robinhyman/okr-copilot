@@ -74,6 +74,30 @@ npm run build
 npm test
 ```
 
+## OKR draft provider (LLM + deterministic fallback)
+- `POST /api/okrs/draft` now attempts OpenAI when `OPENAI_API_KEY` is present.
+- If key is missing, provider call fails, or timeout hits, API gracefully falls back to deterministic draft generation.
+- Response includes metadata:
+  - `metadata.source`: `llm` or `fallback`
+  - `metadata.provider`: `openai` or `deterministic`
+  - `metadata.reason`: fallback reason when relevant
+
+Env vars (see `.env.example`):
+- `OPENAI_API_KEY` (optional but required for live LLM path)
+- `OPENAI_MODEL` (default `gpt-4o-mini`)
+- `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
+- `OKR_DRAFT_LLM_TIMEOUT_MS` (default `5000`)
+- `OKR_DRAFT_INPUT_MAX_CHARS` (default `240`)
+
+Quick local validation:
+```bash
+# fallback path (no API key)
+OPENAI_API_KEY= npm run test:api:integration -- --test-name-pattern "fallback"
+
+# full API integration suite
+npm run test:api:integration
+```
+
 ## WSL troubleshooting (quick)
 - **node/npm/npx mismatch**: run `node -v && npm -v && npx -v`. If npm/npx versions differ or point to different installs, use one runtime source only (WSL-managed Node *or* Windows Node), then restart shell.
 - **npx resolves wrong binary**: run `hash -r` and reopen terminal. In WSL, prefer installing Node with `nvm` inside WSL rather than reusing Windows global binaries.
