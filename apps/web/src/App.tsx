@@ -6,12 +6,28 @@ type Draft = {
   keyResults: Array<{ id?: number; title: string; targetValue: number; currentValue: number; unit: string }>;
 };
 
+type DraftMetadata = {
+  source: 'llm' | 'fallback';
+  provider: 'openai' | 'deterministic';
+  reason?: string;
+};
+
 type ApiOkr = {
   id: number;
   objective: string;
   timeframe: string;
   keyResults: Array<{ id: number; title: string; target_value: number; current_value: number; unit: string }>;
 };
+
+type KrCheckin = {
+  id: number;
+  key_result_id: number;
+  value: number;
+  commentary: string | null;
+  created_at: string;
+};
+
+type Feedback = { type: 'info' | 'success' | 'error'; text: string };
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
@@ -26,10 +42,12 @@ async function jsonFetch(path: string, init?: RequestInit) {
 export function App() {
   const [okrs, setOkrs] = useState<ApiOkr[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [draftMetadata, setDraftMetadata] = useState<DraftMetadata | null>(null);
   const [focusArea, setFocusArea] = useState('Client delivery');
   const [timeframe, setTimeframe] = useState('Q2 2026');
-  const [status, setStatus] = useState('');
+  const [feedback, setFeedback] = useState<Feedback>({ type: 'info', text: '' });
   const [checkins, setCheckins] = useState<Record<number, { value: string; commentary: string }>>({});
+  const [checkinHistory, setCheckinHistory] = useState<Record<number, KrCheckin[]>>({});
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -48,29 +66,62 @@ export function App() {
     };
   }, [draft, okrs]);
 
-  async function refreshOkrs() {
+  async function refreshOkrs(): Promise<ApiOkr[]> {
     const response = await jsonFetch('/api/okrs');
-    setOkrs(response.okrs ?? []);
+    const rows = response.okrs ?? [];
+    setOkrs(rows);
+    return rows;
+  }
+
+  async function refreshCheckinHistory(rows: ApiOkr[]) {
+    const keyResults = rows[0]?.keyResults ?? [];
+    if (!keyResults.length) {
+      setCheckinHistory({});
+      return;
+    }
+
+    const histories = await Promise.all(
+      keyResults.map(async (kr) => {
+        const response = await jsonFetch(`/api/key-results/${kr.id}/checkins?limit=5`);
+        return [kr.id, response.checkins ?? []] as const;
+      })
+    );
+
+    setCheckinHistory(Object.fromEntries(histories));
   }
 
   useEffect(() => {
-    refreshOkrs().catch((e) => setStatus(String(e.message || e)));
+    (async () => {
+      try {
+        const response = await jsonFetch('/api/okrs');
+        const rows = response.okrs ?? [];
+        setOkrs(rows);
+        await refreshCheckinHistory(rows);
+      } catch (e: any) {
+        setFeedback({ type: 'error', text: String(e?.message || e) });
+      }
+    })();
   }, []);
 
   async function generateDraft() {
-    setStatus('Generating draft...');
-    const response = await jsonFetch('/api/okrs/draft', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ focusArea, timeframe })
-    });
-    setDraft(response.draft);
-    setStatus('Draft generated. Review and save.');
+    setFeedback({ type: 'info', text: 'Generating draft...' });
+    try {
+      const response = await jsonFetch('/api/okrs/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ focusArea, timeframe })
+      });
+      setDraft(response.draft);
+      setDraftMetadata(response.metadata ?? null);
+      setFeedback({ type: 'success', text: 'Draft generated. Review and save.' });
+    } catch (e: any) {
+      setFeedback({ type: 'error', text: `Draft generation failed: ${String(e?.message || e)}` });
+    }
   }
 
   async function saveOkr() {
     if (!active) return;
-    setStatus('Saving...');
+    setFeedback({ type: 'info', text: 'Saving...' });
 
     const payload = {
       objective: active.objective,
@@ -81,37 +132,48 @@ export function App() {
     const existingId = okrs[0]?.id;
     const isUpdate = Boolean(existingId);
 
-    const response = await jsonFetch(isUpdate ? `/api/okrs/${existingId}` : '/api/okrs', {
-      method: isUpdate ? 'PUT' : 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-auth-stub-token': stubToken
-      },
-      body: JSON.stringify(payload)
-    });
+    try {
+      await jsonFetch(isUpdate ? `/api/okrs/${existingId}` : '/api/okrs', {
+        method: isUpdate ? 'PUT' : 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-stub-token': stubToken
+        },
+        body: JSON.stringify(payload)
+      });
 
-    setDraft(null);
-    setStatus(isUpdate ? 'OKR updated.' : 'OKR created.');
-    if (!isUpdate) setOkrs([response.okr]);
-    await refreshOkrs();
+      setDraft(null);
+      setDraftMetadata(null);
+      const rows = await refreshOkrs();
+      await refreshCheckinHistory(rows);
+      setFeedback({ type: 'success', text: isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.' });
+    } catch (e: any) {
+      setFeedback({ type: 'error', text: `Save failed: ${String(e?.message || e)}` });
+    }
   }
 
   async function submitCheckin(krId: number) {
     const current = checkins[krId];
     if (!current || !current.value) return;
 
-    setStatus('Submitting check-in...');
-    await jsonFetch(`/api/key-results/${krId}/checkins`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-auth-stub-token': stubToken
-      },
-      body: JSON.stringify({ value: Number(current.value), commentary: current.commentary })
-    });
+    setFeedback({ type: 'info', text: 'Submitting check-in...' });
+    try {
+      await jsonFetch(`/api/key-results/${krId}/checkins`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-stub-token': stubToken
+        },
+        body: JSON.stringify({ value: Number(current.value), commentary: current.commentary })
+      });
 
-    setStatus('Check-in saved.');
-    await refreshOkrs();
+      setCheckins((prev) => ({ ...prev, [krId]: { value: '', commentary: '' } }));
+      const rows = await refreshOkrs();
+      await refreshCheckinHistory(rows);
+      setFeedback({ type: 'success', text: 'Check-in saved.' });
+    } catch (e: any) {
+      setFeedback({ type: 'error', text: `Check-in failed: ${String(e?.message || e)}` });
+    }
   }
 
   return (
@@ -130,6 +192,12 @@ export function App() {
       {active && (
         <section className="panel">
           <h2>2) Edit + save OKR</h2>
+          {!!draftMetadata && (
+            <p className="badge">
+              Draft source: <strong>{draftMetadata.source}</strong>
+              {draftMetadata.source === 'fallback' && draftMetadata.reason ? ` (${draftMetadata.reason})` : ''}
+            </p>
+          )}
           <label>Objective</label>
           <input
             value={active.objective}
@@ -218,12 +286,21 @@ export function App() {
                 />
                 <button onClick={() => submitCheckin(kr.id)}>Submit check-in</button>
               </div>
+              <ul className="history">
+                {(checkinHistory[kr.id] ?? []).map((entry) => (
+                  <li key={entry.id}>
+                    <strong>{entry.value}</strong> — {entry.commentary || 'No commentary'}
+                    <span> ({new Date(entry.created_at).toLocaleString()})</span>
+                  </li>
+                ))}
+                {!checkinHistory[kr.id]?.length && <li>No check-in history yet.</li>}
+              </ul>
             </div>
           ))}
         </section>
       )}
 
-      <p className="status">{status}</p>
+      {!!feedback.text && <p className={`status ${feedback.type}`}>{feedback.text}</p>}
     </main>
   );
 }

@@ -21,10 +21,6 @@ function backoffMinutesForAttempt(attemptCount: number): number | null {
   return RETRY_BACKOFF_MINUTES[attemptCount - 1] ?? null;
 }
 
-export async function ensureRemindersTable(): Promise<void> {
-  // Legacy compatibility only. Schema is now managed via SQL migrations.
-}
-
 export async function createReminder(input: {
   recipient: string;
   message: string;
@@ -47,6 +43,7 @@ export async function listRecentReminders(limit = 20): Promise<any[]> {
   const result = await pool.query(
     `
     SELECT id, created_at, due_at, recipient, message, status, sent_at, last_error,
+           last_error AS failure_reason,
            attempt_count, max_attempts, next_attempt_at, last_attempt_at, outbound_sid,
            provider_status, failure_terminal_at
     FROM reminders
@@ -100,7 +97,7 @@ export async function markReminderSent(id: number, outboundSid: string): Promise
     UPDATE reminders
     SET status = 'sent',
         sent_at = NOW(),
-        outbound_sid = COALESCE(outbound_sid, $2),
+        outbound_sid = $2,
         provider_status = 'queued',
         last_error = NULL,
         next_attempt_at = NULL
@@ -200,10 +197,40 @@ export async function applyReminderStatusBySid(input: {
   return { updated: false, duplicate: true };
 }
 
+export async function requeueFailedReminder(id: number): Promise<{ updated: boolean; reminder: any | null }> {
+  const result = await pool.query(
+    `
+    UPDATE reminders
+    SET status = 'pending',
+        attempt_count = 0,
+        next_attempt_at = NOW(),
+        last_attempt_at = NULL,
+        provider_status = 'requeued',
+        failure_terminal_at = NULL,
+        last_error = NULL,
+        outbound_sid = NULL,
+        sent_at = NULL
+    WHERE id = $1
+      AND status = 'failed'
+    RETURNING id
+    `,
+    [id]
+  );
+
+  if (!result.rowCount) {
+    const existing = await getReminderById(id);
+    return { updated: false, reminder: existing };
+  }
+
+  const reminder = await getReminderById(id);
+  return { updated: true, reminder };
+}
+
 export async function getReminderById(id: number): Promise<any | null> {
   const result = await pool.query(
     `
     SELECT id, created_at, due_at, recipient, message, status, sent_at, last_error,
+           last_error AS failure_reason,
            attempt_count, max_attempts, next_attempt_at, last_attempt_at, outbound_sid,
            provider_status, failure_terminal_at
     FROM reminders

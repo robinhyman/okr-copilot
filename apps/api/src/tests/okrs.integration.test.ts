@@ -79,7 +79,14 @@ test('draft -> save -> fetch -> check-in happy path', async () => {
     .send({ value: 4, commentary: 'Two additional updates shipped this week.' });
   assert.equal(checkinRes.status, 201);
 
-  const listRes = await request(app).get('/api/okrs');
+  const historyRes = await request(app)
+    .get(`/api/key-results/${refreshedKrId}/checkins?limit=5`)
+    .set(authHeaders);
+  assert.equal(historyRes.status, 200);
+  assert.equal(historyRes.body?.ok, true);
+  assert.equal(historyRes.body?.checkins?.[0]?.value, 4);
+
+  const listRes = await request(app).get('/api/okrs').set(authHeaders);
   assert.equal(listRes.status, 200);
   assert.equal(listRes.body?.ok, true);
   assert.equal(listRes.body?.okrs?.[0]?.keyResults?.[0]?.current_value, 4);
@@ -154,4 +161,26 @@ test('draft falls back when LLM provider call fails', async () => {
       process.env.OKR_DRAFT_LLM_TIMEOUT_MS = priorTimeout;
     }
   }
+});
+
+test('read endpoints require auth and update missing OKR returns 404', async () => {
+  const app = createApp();
+
+  const noAuthList = await request(app).get('/api/okrs');
+  assert.equal(noAuthList.status, 401);
+
+  const noAuthHistory = await request(app).get('/api/key-results/1/checkins');
+  assert.equal(noAuthHistory.status, 401);
+
+  const missingUpdate = await request(app)
+    .put('/api/okrs/999999')
+    .set(authHeaders)
+    .send({
+      objective: 'Missing',
+      timeframe: 'Q4',
+      keyResults: [{ title: 'KR', targetValue: 1, currentValue: 0, unit: 'points' }]
+    });
+
+  assert.equal(missingUpdate.status, 404);
+  assert.equal(missingUpdate.body?.error, 'okr_not_found');
 });

@@ -52,3 +52,24 @@ export const env = {
   okrDraftLlmTimeoutMs: toNumber(process.env.OKR_DRAFT_LLM_TIMEOUT_MS, 5000),
   okrDraftInputMaxChars: toNumber(process.env.OKR_DRAFT_INPUT_MAX_CHARS, 240)
 };
+
+export function validateStartupConfig(): void {
+  const issues: string[] = [];
+
+  if (env.authStubEnabled && !env.authStubToken.trim()) {
+    issues.push('AUTH_STUB_TOKEN must be set when AUTH_STUB_ENABLED=true');
+  }
+
+  if (env.twilioVerifySignature) {
+    if (!env.twilioAuthToken.trim()) {
+      issues.push('TWILIO_AUTH_TOKEN must be set when TWILIO_VERIFY_SIGNATURE=true');
+    }
+    if (!env.twilioPublicBaseUrl.trim()) {
+      issues.push('TWILIO_PUBLIC_BASE_URL must be set when TWILIO_VERIFY_SIGNATURE=true');
+    }
+  }
+
+  if (issues.length) {
+    throw new Error(`[config.invalid] ${issues.join(' | ')}`);
+  }
+}

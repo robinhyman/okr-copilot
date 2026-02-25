@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireMutatingAuth } from '../middleware/auth-guard.js';
-import { addKrCheckin, createOkr, listOkrsForUser, updateOkr } from '../data/okrs-repo.js';
+import { addKrCheckin, createOkr, listKrCheckins, listOkrsForUser, updateOkr } from '../data/okrs-repo.js';
 import { createOkrDraftProvider } from '../services/ai/okr-draft-provider.js';
 
 export const okrsRouter = Router();
@@ -50,7 +50,7 @@ okrsRouter.post('/api/okrs/draft', async (req, res) => {
   }
 });
 
-okrsRouter.get('/api/okrs', async (req, res) => {
+okrsRouter.get('/api/okrs', requireMutatingAuth, async (req, res) => {
   try {
     const okrs = await listOkrsForUser(requesterUserId(req));
     return res.status(200).json({ ok: true, okrs });
@@ -80,9 +80,25 @@ okrsRouter.put('/api/okrs/:id', requireMutatingAuth, async (req, res) => {
 
   try {
     const okr = await updateOkr(id, { userId: requesterUserId(req), ...parsed.input });
+    if (!okr) return res.status(404).json({ ok: false, error: 'okr_not_found' });
     return res.status(200).json({ ok: true, okr });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_update_okr' });
+  }
+});
+
+okrsRouter.get('/api/key-results/:id/checkins', requireMutatingAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const limitRaw = req.query?.limit;
+  const limit = typeof limitRaw === 'string' ? Number(limitRaw) : 10;
+
+  if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'invalid_key_result_id' });
+
+  try {
+    const checkins = await listKrCheckins(id, requesterUserId(req), Number.isFinite(limit) ? limit : 10);
+    return res.status(200).json({ ok: true, checkins });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_list_checkins' });
   }
 });
 

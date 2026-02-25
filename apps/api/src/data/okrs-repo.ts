@@ -81,10 +81,15 @@ export async function updateOkr(okrId: number, input: OkrInput) {
   try {
     await client.query('BEGIN');
 
-    await client.query(
+    const updateRes = await client.query(
       `UPDATE okrs SET objective = $2, timeframe = $3, updated_at = NOW() WHERE id = $1 AND user_id = $4`,
       [okrId, input.objective, input.timeframe, input.userId]
     );
+
+    if (!updateRes.rowCount) {
+      await client.query('ROLLBACK');
+      return null;
+    }
 
     await client.query(`DELETE FROM key_results WHERE okr_id = $1`, [okrId]);
 
@@ -104,6 +109,26 @@ export async function updateOkr(okrId: number, input: OkrInput) {
   } finally {
     client.release();
   }
+}
+
+export async function listKrCheckins(keyResultId: number, userId: string, limit = 10) {
+  const safeLimit = Math.max(1, Math.min(limit, 50));
+  const res = await pool.query(
+    `SELECT c.id, c.key_result_id, c.value, c.commentary, c.created_by_user_id, c.created_at
+     FROM kr_checkins c
+     JOIN key_results kr ON kr.id = c.key_result_id
+     JOIN okrs o ON o.id = kr.okr_id
+     WHERE c.key_result_id = $1
+       AND o.user_id = $2
+     ORDER BY c.created_at DESC, c.id DESC
+     LIMIT $3`,
+    [keyResultId, userId, safeLimit]
+  );
+
+  return res.rows.map((row) => ({
+    ...row,
+    value: Number(row.value)
+  }));
 }
 
 export async function addKrCheckin(input: {

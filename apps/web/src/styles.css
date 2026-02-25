@@ -49,7 +49,38 @@ button {
   margin: 0.6rem 0;
 }
 
+.badge {
+  display: inline-block;
+  margin: 0 0 0.75rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #111827;
+  font-size: 0.85rem;
+}
+
+.history {
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+  color: #374151;
+}
+
+.history li {
+  margin: 0.25rem 0;
+}
+
 .status {
-  color: #1d4ed8;
   font-weight: 600;
+}
+
+.status.info {
+  color: #1d4ed8;
+}
+
+.status.success {
+  color: #065f46;
+}
+
+.status.error {
+  color: #b91c1c;
 }

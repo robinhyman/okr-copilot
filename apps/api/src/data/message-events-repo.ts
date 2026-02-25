@@ -13,10 +13,6 @@ export interface MessageEventInput {
   payloadSummary?: Record<string, unknown>;
 }
 
-export async function ensureMessageEventsTable(): Promise<void> {
-  // Legacy compatibility only. Schema is now managed via SQL migrations.
-}
-
 export async function insertMessageEvent(event: MessageEventInput): Promise<void> {
   await pool.query(
     `

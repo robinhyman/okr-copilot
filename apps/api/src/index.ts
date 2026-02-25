@@ -1,4 +1,4 @@
-import { env } from './config/env.js';
+import { env, validateStartupConfig } from './config/env.js';
 import { runDueReminderCycle } from './services/reminders/reminder-worker.js';
 import { createApp } from './app.js';
 import { runMigrations } from './db/migrate.js';
@@ -6,6 +6,7 @@ import { runMigrations } from './db/migrate.js';
 const app = createApp();
 
 async function start() {
+  validateStartupConfig();
   const migrationResult = await runMigrations();
 
   app.listen(env.apiPort, () => {

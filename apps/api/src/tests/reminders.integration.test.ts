@@ -118,6 +118,43 @@ test('duplicate status callback handling is idempotent', async () => {
   assert.equal(reminder?.provider_status, 'delivered');
 });
 
+test('operator can requeue failed reminders', async () => {
+  const created = await createReminder({
+    recipient: 'whatsapp:+447000000004',
+    message: 'needs manual requeue',
+    dueAtIso: new Date(Date.now() - 60_000).toISOString()
+  });
+
+  await pool.query(
+    `UPDATE reminders
+     SET status = 'failed',
+         last_error = 'twilio_63016',
+         attempt_count = max_attempts,
+         next_attempt_at = NULL,
+         failure_terminal_at = NOW(),
+         outbound_sid = 'SM_OLD_FAILED_SID'
+     WHERE id = $1`,
+    [created.id]
+  );
+
+  const app = createApp();
+
+  const listRes = await request(app).get('/api/reminders?limit=10');
+  assert.equal(listRes.status, 200);
+  assert.equal(listRes.body?.reminders?.[0]?.failure_reason, 'twilio_63016');
+
+  const requeueRes = await request(app).post(`/api/reminders/${created.id}/requeue`).set(authHeaders).send({});
+  assert.equal(requeueRes.status, 200);
+  assert.equal(requeueRes.body?.ok, true);
+  assert.equal(requeueRes.body?.reminder?.status, 'pending');
+  assert.equal(requeueRes.body?.reminder?.attempt_count, 0);
+  assert.equal(requeueRes.body?.reminder?.failure_reason, null);
+
+  const refreshed = await getReminderById(created.id);
+  assert.equal(refreshed?.status, 'pending');
+  assert.equal(refreshed?.outbound_sid, null);
+});
+
 test('invalid dueAtIso returns 400', async () => {
   const app = createApp();
 
@@ -125,7 +162,7 @@ test('invalid dueAtIso returns 400', async () => {
     .post('/api/reminders')
     .set(authHeaders)
     .send({
-      recipient: 'whatsapp:+447000000004',
+      recipient: 'whatsapp:+447000000005',
       message: 'bad due date',
       dueAtIso: 'not-a-date'
     });

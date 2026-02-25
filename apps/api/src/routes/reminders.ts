@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createReminder, listRecentReminders } from '../data/reminders-repo.js';
+import { createReminder, listRecentReminders, requeueFailedReminder } from '../data/reminders-repo.js';
 import { runDueReminderCycle } from '../services/reminders/reminder-worker.js';
 import { requireMutatingAuth } from '../middleware/auth-guard.js';
 
@@ -48,6 +48,33 @@ remindersRouter.post('/api/reminders', requireMutatingAuth, async (req, res) => 
       return res.status(400).json({ ok: false, error: 'invalid_dueAtIso' });
     }
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_create_reminder' });
+  }
+});
+
+remindersRouter.post('/api/reminders/:id/requeue', requireMutatingAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ ok: false, error: 'invalid_reminder_id' });
+  }
+
+  try {
+    const result = await requeueFailedReminder(id);
+
+    if (!result.reminder) {
+      return res.status(404).json({ ok: false, error: 'reminder_not_found' });
+    }
+
+    if (!result.updated) {
+      return res.status(409).json({
+        ok: false,
+        error: 'reminder_not_failed',
+        reminder: result.reminder
+      });
+    }
+
+    return res.status(200).json({ ok: true, reminder: result.reminder });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_requeue_reminder' });
   }
 });
 

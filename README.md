@@ -123,11 +123,12 @@ Expected: passing integration tests covering:
 - retry scheduling on failure (1m backoff)
 - eventual sent state after retry then success
 - duplicate status callback handling (idempotent)
+- operator requeue of failed reminders
 - invalid `dueAtIso` returns HTTP 400
-- OKR happy path: draft -> save -> update -> check-in -> fetch
+- OKR happy path: draft -> save -> update -> check-in -> fetch + check-in history
 
 ## Current behavior
-- Web app supports OKR draft generation, editing/saving, and KR check-ins.
+- Web app supports OKR draft generation, draft-source badges (llm/fallback), editing/saving, KR check-ins, and recent check-in history.
 - API exposes deterministic health endpoint (`GET /health`).
 - API exposes module boundary list (`GET /modules`).
 - API exposes locked reminder/check-in defaults (`GET /defaults/checkins`).
@@ -135,8 +136,9 @@ Expected: passing integration tests covering:
 - WhatsApp inbound + status webhooks are implemented.
 - Outbound WhatsApp test send endpoint is implemented.
 - Message events are persisted to Postgres (`message_events`).
-- Reminder scheduling pipeline is implemented (`reminders` table + worker tick).
-- OKR domain APIs implemented: draft generation, create/update/list OKRs, KR check-ins.
+- Reminder scheduling pipeline is implemented (`reminders` table + worker tick), including failed-reminder requeue API.
+- Reminder API responses include `failure_reason` for operator visibility.
+- OKR domain APIs implemented: draft generation, create/update/list OKRs, KR check-ins, KR check-in history.
 - SQL migration tooling added (`npm run migrate`) for schema-managed setup.
 - Placeholder adapter included for Excel KR ingestion.
 
@@ -185,7 +187,17 @@ curl -sS -X POST http://localhost:4000/api/okrs \
   -H 'Content-Type: application/json' \
   -H 'x-auth-stub-token: dev-stub-token' \
   -d '{"objective":"Improve client delivery outcomes","timeframe":"Q2 2026","keyResults":[{"title":"Ship weekly updates","targetValue":12,"currentValue":1,"unit":"updates"}]}'
+
+# View KR check-in history
+curl -sS 'http://localhost:4000/api/key-results/1/checkins?limit=5' \
+  -H 'x-auth-stub-token: dev-stub-token'
+
+# Requeue a failed reminder by id
+curl -sS -X POST http://localhost:4000/api/reminders/1/requeue \
+  -H 'x-auth-stub-token: dev-stub-token'
 ```
+
+Full demo script: `docs/qa/pilot-demo-runbook.md`
 
 ## Useful local commands
 ```bash

@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { env } from './config/env.js';
 import { healthRouter } from './routes/health.js';
+import { readyRouter } from './routes/ready.js';
 import { modulesRouter } from './routes/modules.js';
 import { defaultsRouter } from './routes/defaults.js';
 import { authRouter } from './routes/auth.js';
@@ -32,6 +33,7 @@ export function createApp() {
       status: 'running',
       docs: [
         'GET /health',
+        'GET /ready',
         'GET /modules',
         'GET /defaults/checkins',
         'GET /auth/status',
@@ -41,17 +43,20 @@ export function createApp() {
         'GET /api/reminders/whatsapp/events?limit=20',
         'POST /api/reminders',
         'GET /api/reminders?limit=20',
+        'POST /api/reminders/:id/requeue',
         'POST /api/reminders/run-due',
         'POST /api/okrs/draft',
         'GET /api/okrs',
         'POST /api/okrs',
         'PUT /api/okrs/:id',
+        'GET /api/key-results/:id/checkins?limit=10',
         'POST /api/key-results/:id/checkins'
       ]
     });
   });
 
   app.use(healthRouter);
+  app.use(readyRouter);
   app.use(modulesRouter);
   app.use(defaultsRouter);
   app.use(authRouter);
