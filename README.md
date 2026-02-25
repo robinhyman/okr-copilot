@@ -38,27 +38,22 @@ projects/okr-copilot
 
 ## Local run
 
-### 1) Install
-```bash
-npm install
-```
-
-### 2) Configure env
+### 1) Configure env
 ```bash
 cp .env.example .env
 ```
 
-### 3) Start local infra (Postgres + Redis)
+### 2) Start local infra (Postgres + Redis)
 ```bash
 docker compose up -d
 ```
 
-### 4) Run DB migrations
+### 3) Bootstrap local setup (checks + install + migrations)
 ```bash
-npm run migrate
+npm run setup:local
 ```
 
-### 5) Start web + api
+### 4) Start web + api
 ```bash
 npm run dev
 ```
@@ -78,6 +73,12 @@ npm run typecheck
 npm run build
 npm test
 ```
+
+## WSL troubleshooting (quick)
+- **node/npm/npx mismatch**: run `node -v && npm -v && npx -v`. If npm/npx versions differ or point to different installs, use one runtime source only (WSL-managed Node *or* Windows Node), then restart shell.
+- **npx resolves wrong binary**: run `hash -r` and reopen terminal. In WSL, prefer installing Node with `nvm` inside WSL rather than reusing Windows global binaries.
+- **script-shell errors on npm scripts**: check `npm config get script-shell`. If it points to missing Git Bash/PowerShell path, reset with `npm config delete script-shell`.
+- **fresh bootstrap**: from repo root, run `npm run setup:local` after `.env` and Docker are ready.
 
 ## API integration tests (retry/idempotency/validation)
 

@@ -11,10 +11,12 @@
     "typecheck": "npm run typecheck -ws",
     "test": "npm run test -ws",
     "test:api": "npm run test -w @okr-copilot/api",
-    "test:api:integration": "npm run test:integration -w @okr-copilot/api",
-    "migrate": "npm run migrate -w @okr-copilot/api"
+    "test:api:integration": "cross-env TWILIO_VERIFY_SIGNATURE=false REMINDER_WORKER_ENABLED=false npm run test:integration -w @okr-copilot/api",
+    "migrate": "cross-env NODE_ENV=development npm run migrate -w @okr-copilot/api",
+    "setup:local": "node scripts/setup-local.mjs"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3"
   }
 }
