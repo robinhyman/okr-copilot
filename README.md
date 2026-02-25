@@ -53,7 +53,12 @@ cp .env.example .env
 docker compose up -d
 ```
 
-### 4) Start web + api
+### 4) Run DB migrations
+```bash
+npm run migrate
+```
+
+### 5) Start web + api
 ```bash
 npm run dev
 ```
@@ -65,6 +70,7 @@ npm run dev
 - API auth status: http://localhost:4000/auth/status
 - WhatsApp events: http://localhost:4000/api/reminders/whatsapp/events?limit=20
 - Reminders: http://localhost:4000/api/reminders?limit=20
+- OKRs: http://localhost:4000/api/okrs
 
 ## Validation commands
 ```bash
@@ -88,14 +94,15 @@ docker compose up -d
 npm run test:api:integration
 ```
 
-Expected: 4 passing integration tests covering:
+Expected: passing integration tests covering:
 - retry scheduling on failure (1m backoff)
 - eventual sent state after retry then success
 - duplicate status callback handling (idempotent)
 - invalid `dueAtIso` returns HTTP 400
+- OKR happy path: draft -> save -> update -> check-in -> fetch
 
 ## Current behavior
-- Web shell loads and shows MVP context + ADR alignment.
+- Web app supports OKR draft generation, editing/saving, and KR check-ins.
 - API exposes deterministic health endpoint (`GET /health`).
 - API exposes module boundary list (`GET /modules`).
 - API exposes locked reminder/check-in defaults (`GET /defaults/checkins`).
@@ -104,6 +111,8 @@ Expected: 4 passing integration tests covering:
 - Outbound WhatsApp test send endpoint is implemented.
 - Message events are persisted to Postgres (`message_events`).
 - Reminder scheduling pipeline is implemented (`reminders` table + worker tick).
+- OKR domain APIs implemented: draft generation, create/update/list OKRs, KR check-ins.
+- SQL migration tooling added (`npm run migrate`) for schema-managed setup.
 - Placeholder adapter included for Excel KR ingestion.
 
 ## MVP defaults now wired
@@ -140,6 +149,17 @@ curl -sS -X POST http://localhost:4000/api/reminders \
 # Trigger reminder worker immediately
 curl -sS -X POST http://localhost:4000/api/reminders/run-due \
   -H 'x-auth-stub-token: dev-stub-token'
+
+# Generate draft OKR
+curl -sS -X POST http://localhost:4000/api/okrs/draft \
+  -H 'Content-Type: application/json' \
+  -d '{"focusArea":"Client delivery","timeframe":"Q2 2026"}'
+
+# Save draft as OKR
+curl -sS -X POST http://localhost:4000/api/okrs \
+  -H 'Content-Type: application/json' \
+  -H 'x-auth-stub-token: dev-stub-token' \
+  -d '{"objective":"Improve client delivery outcomes","timeframe":"Q2 2026","keyResults":[{"title":"Ship weekly updates","targetValue":12,"currentValue":1,"unit":"updates"}]}'
 ```
 
 ## Useful local commands
@@ -152,7 +172,6 @@ docker compose down -v
 ```
 
 ## TODO (next block)
-- [TODO-B3] Add proper schema migrations tooling (current table bootstrap is startup-driven).
 - [TODO-B3] Wire WhatsApp provider adapter behind interface (no provider lock-in in domain).
 - [TODO-B3] Parse real Excel workbook to KR update DTOs and validation errors.
 - [TODO-B3] Add workspace/day budget controls for LLM runs and `ai_runs` audit model.

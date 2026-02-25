@@ -10,6 +10,7 @@ import { SingleUserAuthStubProvider } from './modules/auth/auth-service.js';
 import { whatsappWebhooksRouter } from './routes/whatsapp-webhooks.js';
 import { whatsappSendRouter } from './routes/whatsapp-send.js';
 import { remindersRouter } from './routes/reminders.js';
+import { okrsRouter } from './routes/okrs.js';
 
 export function createApp() {
   const app = express();
@@ -40,7 +41,12 @@ export function createApp() {
         'GET /api/reminders/whatsapp/events?limit=20',
         'POST /api/reminders',
         'GET /api/reminders?limit=20',
-        'POST /api/reminders/run-due'
+        'POST /api/reminders/run-due',
+        'POST /api/okrs/draft',
+        'GET /api/okrs',
+        'POST /api/okrs',
+        'PUT /api/okrs/:id',
+        'POST /api/key-results/:id/checkins'
       ]
     });
   });
@@ -52,6 +58,7 @@ export function createApp() {
   app.use(whatsappWebhooksRouter);
   app.use(whatsappSendRouter);
   app.use(remindersRouter);
+  app.use(okrsRouter);
 
   return app;
 }

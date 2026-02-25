@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
 import request from 'supertest';
-import { ensureRemindersTable, getReminderById, createReminder } from '../data/reminders-repo.js';
-import { ensureMessageEventsTable } from '../data/message-events-repo.js';
+import { getReminderById, createReminder } from '../data/reminders-repo.js';
+import { runMigrations } from '../db/migrate.js';
 import { runDueReminderCycle } from '../services/reminders/reminder-worker.js';
 import { createApp } from '../app.js';
 
@@ -22,8 +22,7 @@ async function resetTables() {
 }
 
 test.before(async () => {
-  await ensureMessageEventsTable();
-  await ensureRemindersTable();
+  await runMigrations();
   await resetTables();
 });
 

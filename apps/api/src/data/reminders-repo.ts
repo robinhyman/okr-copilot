@@ -1,8 +1,4 @@
-import pg from 'pg';
-import { env } from '../config/env.js';
-
-const { Pool } = pg;
-const pool = new Pool({ connectionString: env.databaseUrl });
+import { pool } from '../db/pool.js';
 
 export type ReminderStatus = 'pending' | 'processing' | 'retry_scheduled' | 'sent' | 'failed';
 
@@ -26,50 +22,7 @@ function backoffMinutesForAttempt(attemptCount: number): number | null {
 }
 
 export async function ensureRemindersTable(): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS reminders (
-      id BIGSERIAL PRIMARY KEY,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      due_at TIMESTAMPTZ NOT NULL,
-      recipient TEXT NOT NULL,
-      message TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      sent_at TIMESTAMPTZ,
-      last_error TEXT,
-      attempt_count INTEGER NOT NULL DEFAULT 0,
-      max_attempts INTEGER NOT NULL DEFAULT 4,
-      next_attempt_at TIMESTAMPTZ,
-      last_attempt_at TIMESTAMPTZ,
-      outbound_sid TEXT,
-      provider_status TEXT,
-      failure_terminal_at TIMESTAMPTZ
-    );
-  `);
-
-  // Pragmatic startup-driven schema evolution.
-  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;`);
-  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 4;`);
-  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;`);
-  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS outbound_sid TEXT;`);
-  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS provider_status TEXT;`);
-  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS failure_terminal_at TIMESTAMPTZ;`);
-
-  await pool.query(`UPDATE reminders SET next_attempt_at = due_at WHERE next_attempt_at IS NULL;`);
-
-  await pool.query(`
-    ALTER TABLE reminders
-    DROP CONSTRAINT IF EXISTS reminders_status_check;
-  `);
-  await pool.query(`
-    ALTER TABLE reminders
-    ADD CONSTRAINT reminders_status_check
-    CHECK (status IN ('pending', 'processing', 'retry_scheduled', 'sent', 'failed'));
-  `);
-
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_due_status ON reminders(status, due_at);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_next_attempt ON reminders(status, next_attempt_at, id);`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_outbound_sid_unique ON reminders(outbound_sid) WHERE outbound_sid IS NOT NULL;`);
+  // Legacy compatibility only. Schema is now managed via SQL migrations.
 }
 
 export async function createReminder(input: {

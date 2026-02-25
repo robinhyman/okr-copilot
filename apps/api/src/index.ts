@@ -1,16 +1,15 @@
 import { env } from './config/env.js';
-import { ensureMessageEventsTable } from './data/message-events-repo.js';
-import { ensureRemindersTable } from './data/reminders-repo.js';
 import { runDueReminderCycle } from './services/reminders/reminder-worker.js';
 import { createApp } from './app.js';
+import { runMigrations } from './db/migrate.js';
 
 const app = createApp();
 
 async function start() {
-  await ensureMessageEventsTable();
-  await ensureRemindersTable();
+  const migrationResult = await runMigrations();
 
   app.listen(env.apiPort, () => {
+    console.log('[migrations.applied]', migrationResult.applied);
     console.log(`OKR Co-Pilot API listening on http://localhost:${env.apiPort}`);
     console.log('[startup.config]', {
       cwd: process.cwd(),

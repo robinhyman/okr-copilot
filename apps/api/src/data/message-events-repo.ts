@@ -1,7 +1,4 @@
-import pg from 'pg';
-import { env } from '../config/env.js';
-
-const { Pool } = pg;
+import { pool } from '../db/pool.js';
 
 export type MessageEventDirection = 'inbound' | 'outbound' | 'status';
 
@@ -16,26 +13,8 @@ export interface MessageEventInput {
   payloadSummary?: Record<string, unknown>;
 }
 
-const pool = new Pool({ connectionString: env.databaseUrl });
-
 export async function ensureMessageEventsTable(): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS message_events (
-      id BIGSERIAL PRIMARY KEY,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      provider TEXT NOT NULL,
-      direction TEXT NOT NULL,
-      sid TEXT,
-      sender TEXT,
-      recipient TEXT,
-      status TEXT,
-      body_preview TEXT,
-      payload_summary JSONB
-    );
-  `);
-
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_message_events_created_at ON message_events(created_at DESC);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_message_events_sid ON message_events(sid);`);
+  // Legacy compatibility only. Schema is now managed via SQL migrations.
 }
 
 export async function insertMessageEvent(event: MessageEventInput): Promise<void> {
