@@ -73,6 +73,27 @@ npm run build
 npm test
 ```
 
+## API integration tests (retry/idempotency/validation)
+
+Pre-reqs: local Postgres running (via `docker compose up -d`) and `.env` present.
+
+```bash
+# from repo root
+npm install
+cp .env.example .env
+
+docker compose up -d
+
+# run only API integration tests
+npm run test:api:integration
+```
+
+Expected: 4 passing integration tests covering:
+- retry scheduling on failure (1m backoff)
+- eventual sent state after retry then success
+- duplicate status callback handling (idempotent)
+- invalid `dueAtIso` returns HTTP 400
+
 ## Current behavior
 - Web shell loads and shows MVP context + ADR alignment.
 - API exposes deterministic health endpoint (`GET /health`).

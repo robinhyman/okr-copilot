@@ -5,6 +5,11 @@ import { requireMutatingAuth } from '../middleware/auth-guard.js';
 
 export const remindersRouter = Router();
 
+function isValidIsoDate(value: string): boolean {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed);
+}
+
 remindersRouter.get('/api/reminders', async (req, res) => {
   const limitRaw = req.query?.limit;
   const limit = typeof limitRaw === 'string' ? Number(limitRaw) : 20;
@@ -31,11 +36,17 @@ remindersRouter.post('/api/reminders', requireMutatingAuth, async (req, res) => 
   if (!dueAtIso || typeof dueAtIso !== 'string') {
     return res.status(400).json({ ok: false, error: 'missing_dueAtIso' });
   }
+  if (!isValidIsoDate(dueAtIso)) {
+    return res.status(400).json({ ok: false, error: 'invalid_dueAtIso' });
+  }
 
   try {
     const created = await createReminder({ recipient, message, dueAtIso });
     return res.status(201).json({ ok: true, id: created.id });
   } catch (error: any) {
+    if (error?.code === '22007') {
+      return res.status(400).json({ ok: false, error: 'invalid_dueAtIso' });
+    }
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_create_reminder' });
   }
 });

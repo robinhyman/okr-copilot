@@ -4,7 +4,7 @@ import { env } from '../config/env.js';
 const { Pool } = pg;
 const pool = new Pool({ connectionString: env.databaseUrl });
 
-export type ReminderStatus = 'pending' | 'processing' | 'sent' | 'failed';
+export type ReminderStatus = 'pending' | 'processing' | 'retry_scheduled' | 'sent' | 'failed';
 
 export interface ReminderRecord {
   id: number;
@@ -12,6 +12,17 @@ export interface ReminderRecord {
   message: string;
   due_at: string;
   status: ReminderStatus;
+  attempt_count: number;
+  max_attempts: number;
+  next_attempt_at: string;
+  last_attempt_at: string | null;
+}
+
+const RETRY_BACKOFF_MINUTES = [1, 5, 15] as const;
+
+function backoffMinutesForAttempt(attemptCount: number): number | null {
+  // attemptCount is 1-based, after incrementing on a failed attempt.
+  return RETRY_BACKOFF_MINUTES[attemptCount - 1] ?? null;
 }
 
 export async function ensureRemindersTable(): Promise<void> {
@@ -24,11 +35,41 @@ export async function ensureRemindersTable(): Promise<void> {
       message TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       sent_at TIMESTAMPTZ,
-      last_error TEXT
+      last_error TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 4,
+      next_attempt_at TIMESTAMPTZ,
+      last_attempt_at TIMESTAMPTZ,
+      outbound_sid TEXT,
+      provider_status TEXT,
+      failure_terminal_at TIMESTAMPTZ
     );
   `);
 
+  // Pragmatic startup-driven schema evolution.
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 4;`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS outbound_sid TEXT;`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS provider_status TEXT;`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS failure_terminal_at TIMESTAMPTZ;`);
+
+  await pool.query(`UPDATE reminders SET next_attempt_at = due_at WHERE next_attempt_at IS NULL;`);
+
+  await pool.query(`
+    ALTER TABLE reminders
+    DROP CONSTRAINT IF EXISTS reminders_status_check;
+  `);
+  await pool.query(`
+    ALTER TABLE reminders
+    ADD CONSTRAINT reminders_status_check
+    CHECK (status IN ('pending', 'processing', 'retry_scheduled', 'sent', 'failed'));
+  `);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_due_status ON reminders(status, due_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_next_attempt ON reminders(status, next_attempt_at, id);`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_outbound_sid_unique ON reminders(outbound_sid) WHERE outbound_sid IS NOT NULL;`);
 }
 
 export async function createReminder(input: {
@@ -38,8 +79,8 @@ export async function createReminder(input: {
 }): Promise<{ id: number }> {
   const result = await pool.query(
     `
-    INSERT INTO reminders (recipient, message, due_at, status)
-    VALUES ($1, $2, $3::timestamptz, 'pending')
+    INSERT INTO reminders (recipient, message, due_at, next_attempt_at, status)
+    VALUES ($1, $2, $3::timestamptz, $3::timestamptz, 'pending')
     RETURNING id
     `,
     [input.recipient, input.message, input.dueAtIso]
@@ -52,7 +93,9 @@ export async function listRecentReminders(limit = 20): Promise<any[]> {
   const safeLimit = Math.max(1, Math.min(limit, 100));
   const result = await pool.query(
     `
-    SELECT id, created_at, due_at, recipient, message, status, sent_at, last_error
+    SELECT id, created_at, due_at, recipient, message, status, sent_at, last_error,
+           attempt_count, max_attempts, next_attempt_at, last_attempt_at, outbound_sid,
+           provider_status, failure_terminal_at
     FROM reminders
     ORDER BY created_at DESC
     LIMIT $1
@@ -71,17 +114,20 @@ export async function claimDueReminders(limit = 10): Promise<ReminderRecord[]> {
       WITH due AS (
         SELECT id
         FROM reminders
-        WHERE status = 'pending'
-          AND due_at <= NOW()
-        ORDER BY due_at ASC
+        WHERE status IN ('pending', 'retry_scheduled')
+          AND next_attempt_at <= NOW()
+          AND attempt_count < max_attempts
+        ORDER BY next_attempt_at ASC, due_at ASC, id ASC
         LIMIT $1
         FOR UPDATE SKIP LOCKED
       )
       UPDATE reminders r
-      SET status = 'processing'
+      SET status = 'processing',
+          last_attempt_at = NOW()
       FROM due
       WHERE r.id = due.id
-      RETURNING r.id, r.recipient, r.message, r.due_at, r.status
+      RETURNING r.id, r.recipient, r.message, r.due_at, r.status,
+                r.attempt_count, r.max_attempts, r.next_attempt_at, r.last_attempt_at
       `,
       [limit]
     );
@@ -95,24 +141,127 @@ export async function claimDueReminders(limit = 10): Promise<ReminderRecord[]> {
   }
 }
 
-export async function markReminderSent(id: number): Promise<void> {
+export async function markReminderSent(id: number, outboundSid: string): Promise<void> {
   await pool.query(
     `
     UPDATE reminders
-    SET status = 'sent', sent_at = NOW(), last_error = NULL
+    SET status = 'sent',
+        sent_at = NOW(),
+        outbound_sid = COALESCE(outbound_sid, $2),
+        provider_status = 'queued',
+        last_error = NULL,
+        next_attempt_at = NULL
+    WHERE id = $1
+    `,
+    [id, outboundSid]
+  );
+}
+
+export async function markReminderAttemptFailed(id: number, lastError: string): Promise<void> {
+  const result = await pool.query(
+    `
+    SELECT attempt_count, max_attempts
+    FROM reminders
     WHERE id = $1
     `,
     [id]
   );
-}
 
-export async function markReminderFailed(id: number, lastError: string): Promise<void> {
+  if (!result.rowCount) return;
+
+  const currentAttempts = Number(result.rows[0].attempt_count ?? 0);
+  const maxAttempts = Number(result.rows[0].max_attempts ?? 4);
+  const nextAttemptCount = currentAttempts + 1;
+  const nextBackoffMinutes = backoffMinutesForAttempt(nextAttemptCount);
+
+  if (nextAttemptCount >= maxAttempts || nextBackoffMinutes === null) {
+    await pool.query(
+      `
+      UPDATE reminders
+      SET status = 'failed',
+          attempt_count = $2,
+          last_error = $3,
+          provider_status = 'failed_terminal',
+          failure_terminal_at = NOW(),
+          next_attempt_at = NULL
+      WHERE id = $1
+      `,
+      [id, nextAttemptCount, lastError.slice(0, 500)]
+    );
+    return;
+  }
+
   await pool.query(
     `
     UPDATE reminders
-    SET status = 'failed', last_error = $2
+    SET status = 'retry_scheduled',
+        attempt_count = $2,
+        last_error = $3,
+        provider_status = 'retry_scheduled',
+        next_attempt_at = NOW() + ($4::text || ' minutes')::interval
     WHERE id = $1
     `,
-    [id, lastError.slice(0, 500)]
+    [id, nextAttemptCount, lastError.slice(0, 500), String(nextBackoffMinutes)]
   );
+}
+
+export async function applyReminderStatusBySid(input: {
+  sid: string;
+  providerStatus: string;
+  providerErrorCode?: string | null;
+}): Promise<{ updated: boolean; duplicate: boolean }> {
+  const status = input.providerStatus.toLowerCase().trim();
+
+  const result = await pool.query(
+    `
+    UPDATE reminders
+    SET provider_status = $2,
+        last_error = CASE
+          WHEN $3::text IS NOT NULL AND $3::text <> '' THEN COALESCE(last_error, '') || CASE WHEN last_error IS NULL OR last_error = '' THEN '' ELSE '; ' END || 'provider_error:' || $3::text
+          ELSE last_error
+        END,
+        failure_terminal_at = CASE
+          WHEN $2 IN ('undelivered', 'failed') THEN NOW()
+          ELSE failure_terminal_at
+        END,
+        status = CASE
+          WHEN $2 IN ('delivered', 'read') THEN 'sent'
+          WHEN $2 IN ('undelivered', 'failed') AND status <> 'sent' THEN 'failed'
+          ELSE status
+        END
+    WHERE outbound_sid = $1
+      AND (provider_status IS DISTINCT FROM $2)
+    `,
+    [input.sid, status, input.providerErrorCode ?? null]
+  );
+
+  if (result.rowCount && result.rowCount > 0) {
+    return { updated: true, duplicate: false };
+  }
+
+  const existing = await pool.query(`SELECT id FROM reminders WHERE outbound_sid = $1`, [input.sid]);
+  if (!existing.rowCount) {
+    return { updated: false, duplicate: false };
+  }
+
+  return { updated: false, duplicate: true };
+}
+
+export async function getReminderById(id: number): Promise<any | null> {
+  const result = await pool.query(
+    `
+    SELECT id, created_at, due_at, recipient, message, status, sent_at, last_error,
+           attempt_count, max_attempts, next_attempt_at, last_attempt_at, outbound_sid,
+           provider_status, failure_terminal_at
+    FROM reminders
+    WHERE id = $1
+    `,
+    [id]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+export async function __dangerousTruncateRemindersForTests(): Promise<void> {
+  await pool.query('TRUNCATE TABLE reminders RESTART IDENTITY');
 }

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 import { insertMessageEvent } from '../data/message-events-repo.js';
+import { applyReminderStatusBySid } from '../data/reminders-repo.js';
 import { createRateLimiter } from '../middleware/rate-limit.js';
 
 export const whatsappWebhooksRouter = Router();
@@ -140,6 +141,21 @@ whatsappWebhooksRouter.post('/api/reminders/whatsapp/status', webhookRateLimiter
     });
   } catch (error: any) {
     console.error('[whatsapp.status.persist.error]', { error: error?.message ?? 'unknown_error' });
+  }
+
+  if (typeof messageSid === 'string' && messageSid && typeof messageStatus === 'string' && messageStatus) {
+    try {
+      const update = await applyReminderStatusBySid({
+        sid: messageSid,
+        providerStatus: messageStatus,
+        providerErrorCode: typeof errorCode === 'string' ? errorCode : null
+      });
+      if (update.duplicate) {
+        console.log('[whatsapp.status.duplicate]', { sid: messageSid, status: messageStatus });
+      }
+    } catch (error: any) {
+      console.error('[whatsapp.status.reminder_update.error]', { error: error?.message ?? 'unknown_error' });
+    }
   }
 
   return res.status(200).json({ ok: true });

@@ -3,7 +3,7 @@ import path from 'node:path';
 
 // Load root project .env when running from apps/api workspace
 const envPath = path.resolve(process.cwd(), '../../.env');
-dotenv.config({ path: envPath, override: true });
+dotenv.config({ path: envPath });
 
 const toNumber = (value: string | undefined, fallback: number): number => {
   const parsed = Number(value);
