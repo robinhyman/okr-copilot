@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate:
+    name: Typecheck, build, and API integration tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: okr
+          POSTGRES_PASSWORD: okr
+          POSTGRES_DB: okr_copilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U okr -d okr_copilot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://okr:okr@localhost:5432/okr_copilot?schema=public
+      REDIS_URL: redis://localhost:6379
+      AUTH_STUB_ENABLED: 'true'
+      AUTH_STUB_TOKEN: dev-stub-token
+      TWILIO_VERIFY_SIGNATURE: 'false'
+      REMINDER_WORKER_ENABLED: 'false'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: API integration tests
+        run: npm run test:api:integration
