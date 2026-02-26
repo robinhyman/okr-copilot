@@ -33,7 +33,15 @@ const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
 
 async function jsonFetch(path: string, init?: RequestInit) {
-  const res = await fetch(`${apiBase}${path}`, init);
+  const mergedHeaders: Record<string, string> = {
+    'x-auth-stub-token': stubToken,
+    ...(init?.headers ? (init.headers as Record<string, string>) : {})
+  };
+
+  const res = await fetch(`${apiBase}${path}`, {
+    ...init,
+    headers: mergedHeaders
+  });
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error || `request_failed_${res.status}`);
   return data;
