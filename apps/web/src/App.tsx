@@ -282,19 +282,23 @@ export function App() {
               </button>
             </div>
 
-            {okrs[0] ? (
+            {!!okrs.length ? (
               <div className="panel nested">
-                <h3>Current objective</h3>
-                <p>
-                  <strong>{okrs[0].objective}</strong> ({okrs[0].timeframe})
-                </p>
-                <ul className="history">
-                  {okrs[0].keyResults.map((kr) => (
-                    <li key={kr.id}>
-                      {kr.title} — {kr.current_value}/{kr.target_value} {kr.unit}
-                    </li>
-                  ))}
-                </ul>
+                <h3>Objectives</h3>
+                {okrs.map((okr) => (
+                  <div key={okr.id} className="objective-block">
+                    <p>
+                      <strong>{okr.objective}</strong> ({okr.timeframe})
+                    </p>
+                    <ul className="history">
+                      {okr.keyResults.map((kr) => (
+                        <li key={kr.id}>
+                          {kr.title} — {kr.current_value}/{kr.target_value} {kr.unit}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
                 <p className="muted">
                   Last check-in:{' '}
                   {overviewStats.lastCheckinAt ? new Date(overviewStats.lastCheckinAt).toLocaleString() : 'No check-ins yet'}

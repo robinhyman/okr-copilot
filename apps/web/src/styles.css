@@ -158,6 +158,18 @@ button.secondary {
   padding-left: 1rem;
 }
 
+.objective-block {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.objective-block:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+
 .status {
   font-weight: 600;
 }
