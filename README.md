@@ -58,7 +58,7 @@ npm run setup:local
 npm run dev
 ```
 
-- Web: http://localhost:5173
+- Web: http://localhost:5173 (app defaults to `/overview`)
 - API health: http://localhost:4000/health
 - API module map: http://localhost:4000/modules
 - API check-in defaults: http://localhost:4000/defaults/checkins
@@ -66,6 +66,15 @@ npm run dev
 - WhatsApp events: http://localhost:4000/api/reminders/whatsapp/events?limit=20
 - Reminders: http://localhost:4000/api/reminders?limit=20
 - OKRs: http://localhost:4000/api/okrs
+
+## Web route usage (Sprint 1 UI)
+- `http://localhost:5173/overview` — status snapshot and entry points
+- `http://localhost:5173/okrs` — generate draft, edit objective/KRs, save
+- `http://localhost:5173/checkins` — submit KR values/commentary and view recent history
+
+Notes:
+- Navigation is route-based and preserves in-memory form/check-in state while moving between pages in the same session.
+- Protected API reads/writes continue using the `x-auth-stub-token` header from `VITE_AUTH_STUB_TOKEN`.
 
 ## Validation commands
 ```bash
@@ -128,7 +137,11 @@ Expected: passing integration tests covering:
 - OKR happy path: draft -> save -> update -> check-in -> fetch + check-in history
 
 ## Current behavior
-- Web app supports OKR draft generation, draft-source badges (llm/fallback), editing/saving, KR check-ins, and recent check-in history.
+- Web app now uses a route shell with three pages:
+  - `/overview` for snapshot stats and quick actions
+  - `/okrs` for draft generation + edit/save
+  - `/checkins` for KR check-ins + recent history
+- Existing API contracts remain unchanged for draft/save/check-in flows.
 - API exposes deterministic health endpoint (`GET /health`).
 - API exposes module boundary list (`GET /modules`).
 - API exposes locked reminder/check-in defaults (`GET /defaults/checkins`).

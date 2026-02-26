@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { getRoutePath, validateDraft, type RoutePath } from './lib/ui';
 
 type Draft = {
   objective: string;
@@ -32,6 +33,12 @@ type Feedback = { type: 'info' | 'success' | 'error'; text: string };
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
 
+const NAV_ITEMS: Array<{ path: RoutePath; label: string }> = [
+  { path: '/overview', label: 'Overview' },
+  { path: '/okrs', label: 'OKRs' },
+  { path: '/checkins', label: 'Check-ins' }
+];
+
 async function jsonFetch(path: string, init?: RequestInit) {
   const mergedHeaders: Record<string, string> = {
     'x-auth-stub-token': stubToken,
@@ -48,6 +55,7 @@ async function jsonFetch(path: string, init?: RequestInit) {
 }
 
 export function App() {
+  const [route, setRoute] = useState<RoutePath>(() => getRoutePath(window.location.pathname));
   const [okrs, setOkrs] = useState<ApiOkr[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [draftMetadata, setDraftMetadata] = useState<DraftMetadata | null>(null);
@@ -56,6 +64,9 @@ export function App() {
   const [feedback, setFeedback] = useState<Feedback>({ type: 'info', text: '' });
   const [checkins, setCheckins] = useState<Record<number, { value: string; commentary: string }>>({});
   const [checkinHistory, setCheckinHistory] = useState<Record<number, KrCheckin[]>>({});
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [submittingKrId, setSubmittingKrId] = useState<number | null>(null);
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -73,6 +84,32 @@ export function App() {
       }))
     };
   }, [draft, okrs]);
+
+  const validationErrors = useMemo(() => validateDraft(active), [active]);
+
+  const overviewStats = useMemo(() => {
+    const keyResults = okrs[0]?.keyResults ?? [];
+    const total = keyResults.length;
+    const onTrack = keyResults.filter((kr) => Number(kr.current_value) >= Number(kr.target_value)).length;
+    const atRisk = Math.max(total - onTrack, 0);
+
+    const recent = Object.values(checkinHistory)
+      .flat()
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+
+    return {
+      objectiveCount: okrs.length,
+      onTrack,
+      atRisk,
+      lastCheckinAt: recent?.created_at ?? null
+    };
+  }, [okrs, checkinHistory]);
+
+  useEffect(() => {
+    const onPopState = () => setRoute(getRoutePath(window.location.pathname));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   async function refreshOkrs(): Promise<ApiOkr[]> {
     const response = await jsonFetch('/api/okrs');
@@ -101,9 +138,7 @@ export function App() {
   useEffect(() => {
     (async () => {
       try {
-        const response = await jsonFetch('/api/okrs');
-        const rows = response.okrs ?? [];
-        setOkrs(rows);
+        const rows = await refreshOkrs();
         await refreshCheckinHistory(rows);
       } catch (e: any) {
         setFeedback({ type: 'error', text: String(e?.message || e) });
@@ -111,7 +146,15 @@ export function App() {
     })();
   }, []);
 
+  function navigate(path: RoutePath) {
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setRoute(path);
+  }
+
   async function generateDraft() {
+    setIsGenerating(true);
     setFeedback({ type: 'info', text: 'Generating draft...' });
     try {
       const response = await jsonFetch('/api/okrs/draft', {
@@ -124,11 +167,19 @@ export function App() {
       setFeedback({ type: 'success', text: 'Draft generated. Review and save.' });
     } catch (e: any) {
       setFeedback({ type: 'error', text: `Draft generation failed: ${String(e?.message || e)}` });
+    } finally {
+      setIsGenerating(false);
     }
   }
 
   async function saveOkr() {
     if (!active) return;
+    if (validationErrors.length) {
+      setFeedback({ type: 'error', text: 'Please fix validation errors before saving.' });
+      return;
+    }
+
+    setIsSaving(true);
     setFeedback({ type: 'info', text: 'Saving...' });
 
     const payload = {
@@ -157,6 +208,8 @@ export function App() {
       setFeedback({ type: 'success', text: isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.' });
     } catch (e: any) {
       setFeedback({ type: 'error', text: `Save failed: ${String(e?.message || e)}` });
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -164,6 +217,7 @@ export function App() {
     const current = checkins[krId];
     if (!current || !current.value) return;
 
+    setSubmittingKrId(krId);
     setFeedback({ type: 'info', text: 'Submitting check-in...' });
     try {
       await jsonFetch(`/api/key-results/${krId}/checkins`, {
@@ -181,134 +235,229 @@ export function App() {
       setFeedback({ type: 'success', text: 'Check-in saved.' });
     } catch (e: any) {
       setFeedback({ type: 'error', text: `Check-in failed: ${String(e?.message || e)}` });
+    } finally {
+      setSubmittingKrId(null);
     }
   }
 
   return (
-    <main className="container">
-      <h1>OKR Co-Pilot</h1>
-
-      <section className="panel">
-        <h2>1) Generate LLM-assisted draft</h2>
-        <div className="row">
-          <input value={focusArea} onChange={(e) => setFocusArea(e.target.value)} placeholder="Focus area" />
-          <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="Timeframe" />
-          <button onClick={() => generateDraft()}>Generate draft</button>
-        </div>
-      </section>
-
-      {active && (
-        <section className="panel">
-          <h2>2) Edit + save OKR</h2>
-          {!!draftMetadata && (
-            <p className="badge">
-              Draft source: <strong>{draftMetadata.source}</strong>
-              {draftMetadata.source === 'fallback' && draftMetadata.reason ? ` (${draftMetadata.reason})` : ''}
-            </p>
-          )}
-          <label>Objective</label>
-          <input
-            value={active.objective}
-            onChange={(e) => setDraft({ ...(active as Draft), objective: e.target.value })}
-          />
-          <label>Timeframe</label>
-          <input
-            value={active.timeframe}
-            onChange={(e) => setDraft({ ...(active as Draft), timeframe: e.target.value })}
-          />
-
-          <h3>Key Results</h3>
-          {active.keyResults.map((kr, index) => (
-            <div className="kr" key={kr.id ?? index}>
-              <input
-                value={kr.title}
-                onChange={(e) => {
-                  const next = [...active.keyResults];
-                  next[index] = { ...kr, title: e.target.value };
-                  setDraft({ ...(active as Draft), keyResults: next });
-                }}
-              />
-              <input
-                type="number"
-                value={kr.currentValue}
-                onChange={(e) => {
-                  const next = [...active.keyResults];
-                  next[index] = { ...kr, currentValue: Number(e.target.value || 0) };
-                  setDraft({ ...(active as Draft), keyResults: next });
-                }}
-              />
-              <span>/</span>
-              <input
-                type="number"
-                value={kr.targetValue}
-                onChange={(e) => {
-                  const next = [...active.keyResults];
-                  next[index] = { ...kr, targetValue: Number(e.target.value || 0) };
-                  setDraft({ ...(active as Draft), keyResults: next });
-                }}
-              />
-              <input
-                value={kr.unit}
-                onChange={(e) => {
-                  const next = [...active.keyResults];
-                  next[index] = { ...kr, unit: e.target.value };
-                  setDraft({ ...(active as Draft), keyResults: next });
-                }}
-              />
-            </div>
+    <main className="app-shell">
+      <aside className="sidebar panel">
+        <h1>OKR Co-Pilot</h1>
+        <nav className="nav-list">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.path}
+              className={`nav-item ${route === item.path ? 'active' : ''}`}
+              onClick={() => navigate(item.path)}
+            >
+              {item.label}
+            </button>
           ))}
+        </nav>
+      </aside>
 
-          <button onClick={() => saveOkr()}>Save OKR</button>
-        </section>
-      )}
-
-      {!!okrs.length && (
-        <section className="panel">
-          <h2>3) KR check-ins (value + commentary)</h2>
-          {okrs[0].keyResults.map((kr) => (
-            <div key={kr.id} className="checkin">
-              <div>
-                <strong>{kr.title}</strong> ({kr.current_value}/{kr.target_value} {kr.unit})
+      <section className="main-content">
+        {route === '/overview' && (
+          <section className="panel">
+            <h2>Overview</h2>
+            <div className="stats-row">
+              <div className="stat-card">
+                <p>Active objectives</p>
+                <strong>{overviewStats.objectiveCount}</strong>
               </div>
+              <div className="stat-card">
+                <p>On track KRs</p>
+                <strong>{overviewStats.onTrack}</strong>
+              </div>
+              <div className="stat-card">
+                <p>At risk KRs</p>
+                <strong>{overviewStats.atRisk}</strong>
+              </div>
+            </div>
+            <div className="row">
+              <button onClick={() => navigate('/okrs')}>Generate new draft</button>
+              <button className="secondary" onClick={() => navigate('/checkins')}>
+                Log check-in
+              </button>
+            </div>
+
+            {okrs[0] ? (
+              <div className="panel nested">
+                <h3>Current objective</h3>
+                <p>
+                  <strong>{okrs[0].objective}</strong> ({okrs[0].timeframe})
+                </p>
+                <ul className="history">
+                  {okrs[0].keyResults.map((kr) => (
+                    <li key={kr.id}>
+                      {kr.title} — {kr.current_value}/{kr.target_value} {kr.unit}
+                    </li>
+                  ))}
+                </ul>
+                <p className="muted">
+                  Last check-in:{' '}
+                  {overviewStats.lastCheckinAt ? new Date(overviewStats.lastCheckinAt).toLocaleString() : 'No check-ins yet'}
+                </p>
+              </div>
+            ) : (
+              <p>No OKR yet. Head to OKRs to generate your first draft.</p>
+            )}
+          </section>
+        )}
+
+        {route === '/okrs' && (
+          <section className="panel">
+            <h2>OKRs</h2>
+            <p className="muted">Generate, edit and save your active OKR set.</p>
+
+            <div className="panel nested">
+              <h3>Draft generator</h3>
               <div className="row">
-                <input
-                  type="number"
-                  placeholder="New value"
-                  value={checkins[kr.id]?.value ?? ''}
-                  onChange={(e) =>
-                    setCheckins((prev) => ({
-                      ...prev,
-                      [kr.id]: { value: e.target.value, commentary: prev[kr.id]?.commentary ?? '' }
-                    }))
-                  }
-                />
-                <input
-                  placeholder="Commentary"
-                  value={checkins[kr.id]?.commentary ?? ''}
-                  onChange={(e) =>
-                    setCheckins((prev) => ({
-                      ...prev,
-                      [kr.id]: { value: prev[kr.id]?.value ?? '', commentary: e.target.value }
-                    }))
-                  }
-                />
-                <button onClick={() => submitCheckin(kr.id)}>Submit check-in</button>
+                <input value={focusArea} onChange={(e) => setFocusArea(e.target.value)} placeholder="Focus area" />
+                <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="Timeframe" />
+                <button disabled={isGenerating} onClick={() => generateDraft()}>
+                  {isGenerating ? 'Generating...' : 'Generate draft'}
+                </button>
               </div>
-              <ul className="history">
-                {(checkinHistory[kr.id] ?? []).map((entry) => (
-                  <li key={entry.id}>
-                    <strong>{entry.value}</strong> — {entry.commentary || 'No commentary'}
-                    <span> ({new Date(entry.created_at).toLocaleString()})</span>
-                  </li>
-                ))}
-                {!checkinHistory[kr.id]?.length && <li>No check-in history yet.</li>}
-              </ul>
             </div>
-          ))}
-        </section>
-      )}
 
-      {!!feedback.text && <p className={`status ${feedback.type}`}>{feedback.text}</p>}
+            {active ? (
+              <>
+                {!!draftMetadata && (
+                  <p className="badge">
+                    Draft source: <strong>{draftMetadata.source}</strong>
+                    {draftMetadata.source === 'fallback' && draftMetadata.reason ? ` (${draftMetadata.reason})` : ''}
+                  </p>
+                )}
+
+                <label>Objective</label>
+                <input
+                  value={active.objective}
+                  onChange={(e) => setDraft({ ...(active as Draft), objective: e.target.value })}
+                />
+                <label>Timeframe</label>
+                <input
+                  value={active.timeframe}
+                  onChange={(e) => setDraft({ ...(active as Draft), timeframe: e.target.value })}
+                />
+
+                <h3>Key Results</h3>
+                {active.keyResults.map((kr, index) => (
+                  <div className="kr" key={kr.id ?? index}>
+                    <input
+                      value={kr.title}
+                      onChange={(e) => {
+                        const next = [...active.keyResults];
+                        next[index] = { ...kr, title: e.target.value };
+                        setDraft({ ...(active as Draft), keyResults: next });
+                      }}
+                    />
+                    <input
+                      type="number"
+                      value={kr.currentValue}
+                      onChange={(e) => {
+                        const next = [...active.keyResults];
+                        next[index] = { ...kr, currentValue: Number(e.target.value || 0) };
+                        setDraft({ ...(active as Draft), keyResults: next });
+                      }}
+                    />
+                    <span>/</span>
+                    <input
+                      type="number"
+                      value={kr.targetValue}
+                      onChange={(e) => {
+                        const next = [...active.keyResults];
+                        next[index] = { ...kr, targetValue: Number(e.target.value || 0) };
+                        setDraft({ ...(active as Draft), keyResults: next });
+                      }}
+                    />
+                    <input
+                      value={kr.unit}
+                      onChange={(e) => {
+                        const next = [...active.keyResults];
+                        next[index] = { ...kr, unit: e.target.value };
+                        setDraft({ ...(active as Draft), keyResults: next });
+                      }}
+                    />
+                  </div>
+                ))}
+
+                {!!validationErrors.length && (
+                  <ul className="validation-list">
+                    {validationErrors.map((err) => (
+                      <li key={err}>{err}</li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="sticky-actions">
+                  <button disabled={isSaving} onClick={() => saveOkr()}>
+                    {isSaving ? 'Saving...' : 'Save OKR'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p>No draft or saved OKR found yet. Generate a draft to get started.</p>
+            )}
+          </section>
+        )}
+
+        {route === '/checkins' && (
+          <section className="panel">
+            <h2>Check-ins</h2>
+            {!!okrs.length ? (
+              okrs[0].keyResults.map((kr) => (
+                <div key={kr.id} className="checkin">
+                  <div>
+                    <strong>{kr.title}</strong> ({kr.current_value}/{kr.target_value} {kr.unit})
+                  </div>
+                  <div className="row">
+                    <input
+                      type="number"
+                      placeholder="New value"
+                      value={checkins[kr.id]?.value ?? ''}
+                      onChange={(e) =>
+                        setCheckins((prev) => ({
+                          ...prev,
+                          [kr.id]: { value: e.target.value, commentary: prev[kr.id]?.commentary ?? '' }
+                        }))
+                      }
+                    />
+                    <input
+                      placeholder="Commentary"
+                      value={checkins[kr.id]?.commentary ?? ''}
+                      onChange={(e) =>
+                        setCheckins((prev) => ({
+                          ...prev,
+                          [kr.id]: { value: prev[kr.id]?.value ?? '', commentary: e.target.value }
+                        }))
+                      }
+                    />
+                    <button disabled={submittingKrId === kr.id} onClick={() => submitCheckin(kr.id)}>
+                      {submittingKrId === kr.id ? 'Submitting...' : 'Submit check-in'}
+                    </button>
+                  </div>
+                  <ul className="history">
+                    {(checkinHistory[kr.id] ?? []).map((entry) => (
+                      <li key={entry.id}>
+                        <strong>{entry.value}</strong> — {entry.commentary || 'No commentary'}
+                        <span> ({new Date(entry.created_at).toLocaleString()})</span>
+                      </li>
+                    ))}
+                    {!checkinHistory[kr.id]?.length && <li>No check-in history yet.</li>}
+                  </ul>
+                </div>
+              ))
+            ) : (
+              <p>No key results available yet. Save an OKR first.</p>
+            )}
+          </section>
+        )}
+
+        {!!feedback.text && <p className={`status ${feedback.type}`}>{feedback.text}</p>}
+      </section>
     </main>
   );
 }
+
