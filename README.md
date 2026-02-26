@@ -139,8 +139,8 @@ Expected: passing integration tests covering:
 - Reminder scheduling pipeline is implemented (`reminders` table + worker tick), including failed-reminder requeue API.
 - Reminder API responses include `failure_reason` for operator visibility.
 - OKR domain APIs implemented: draft generation, create/update/list OKRs, KR check-ins, KR check-in history.
+- Excel KR import APIs implemented (preview + apply via `.xlsx` upload, with row-level validation and source-tagged check-ins).
 - SQL migration tooling added (`npm run migrate`) for schema-managed setup.
-- Placeholder adapter included for Excel KR ingestion.
 
 ## MVP defaults now wired
 - Timezone default: `Europe/London`
@@ -197,6 +197,47 @@ curl -sS -X POST http://localhost:4000/api/reminders/1/requeue \
   -H 'x-auth-stub-token: dev-stub-token'
 ```
 
+## Excel KR import (MVP)
+
+Accepted workbook format (`.xlsx`, first sheet):
+
+- `objective` (optional for display only in MVP)
+- `key_result` (required, title match, case-insensitive + trim)
+- `value` (required, numeric)
+- `commentary` (optional)
+- `timestamp` (optional, ISO string or Excel date cell)
+
+Example rows:
+
+```csv
+objective,key_result,value,commentary,timestamp
+Improve client delivery outcomes,Ship weekly updates,4,Imported from weekly report,2026-02-26T10:00:00Z
+Improve client delivery outcomes,Close loop with sponsor by Friday,1,Done,
+```
+
+Preview import (no writes):
+
+```bash
+curl -sS -X POST http://localhost:4000/api/okrs/import/excel/preview \
+  -H 'x-auth-stub-token: dev-stub-token' \
+  -F 'file=@./sample-kr-import.xlsx'
+```
+
+Apply import (writes check-ins with `source=excel_import`):
+
+```bash
+# apply all valid matched rows
+curl -sS -X POST http://localhost:4000/api/okrs/import/excel/apply \
+  -H 'x-auth-stub-token: dev-stub-token' \
+  -F 'file=@./sample-kr-import.xlsx'
+
+# apply only selected sheet row numbers (header is row 1, first data row is 2)
+curl -sS -X POST http://localhost:4000/api/okrs/import/excel/apply \
+  -H 'x-auth-stub-token: dev-stub-token' \
+  -F 'selectedRowNumbers=2,3' \
+  -F 'file=@./sample-kr-import.xlsx'
+```
+
 Full demo script: `docs/qa/pilot-demo-runbook.md`
 
 ## Useful local commands
@@ -210,7 +251,6 @@ docker compose down -v
 
 ## TODO (next block)
 - [TODO-B3] Wire WhatsApp provider adapter behind interface (no provider lock-in in domain).
-- [TODO-B3] Parse real Excel workbook to KR update DTOs and validation errors.
 - [TODO-B3] Add workspace/day budget controls for LLM runs and `ai_runs` audit model.
 - [TODO-B3] Add API tests for reminders/check-in deterministic behavior.
 

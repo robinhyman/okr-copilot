@@ -50,7 +50,9 @@ export function createApp() {
         'POST /api/okrs',
         'PUT /api/okrs/:id',
         'GET /api/key-results/:id/checkins?limit=10',
-        'POST /api/key-results/:id/checkins'
+        'POST /api/key-results/:id/checkins',
+        'POST /api/okrs/import/excel/preview (multipart form-data: file)',
+        'POST /api/okrs/import/excel/apply (multipart form-data: file, optional selectedRowNumbers=2,3)'
       ]
     });
   });

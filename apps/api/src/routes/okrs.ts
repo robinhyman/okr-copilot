@@ -1,10 +1,16 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { requireMutatingAuth } from '../middleware/auth-guard.js';
 import { addKrCheckin, createOkr, listKrCheckins, listOkrsForUser, updateOkr } from '../data/okrs-repo.js';
 import { createOkrDraftProvider } from '../services/ai/okr-draft-provider.js';
+import { applyPreviewSelection, buildPreview, parseWorkbook } from '../services/excel/kr-import.js';
 
 export const okrsRouter = Router();
 const draftProvider = createOkrDraftProvider();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 }
+});
 
 function requesterUserId(req: any): string {
   return req.auth?.user?.id ?? 'single-user';
@@ -121,4 +127,50 @@ okrsRouter.post('/api/key-results/:id/checkins', requireMutatingAuth, async (req
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_add_checkin' });
   }
+});
+
+okrsRouter.post('/api/okrs/import/excel/preview', requireMutatingAuth, upload.single('file'), async (req, res) => {
+  if (!req.file?.buffer) {
+    return res.status(400).json({ ok: false, error: 'file_required' });
+  }
+
+  const parsed = parseWorkbook(req.file.buffer);
+  if (parsed.fileErrors.length > 0) {
+    return res.status(400).json({ ok: false, error: 'invalid_file', fileErrors: parsed.fileErrors });
+  }
+
+  const preview = await buildPreview(requesterUserId(req), parsed.rows);
+  return res.status(200).json({ ok: true, preview });
+});
+
+okrsRouter.post('/api/okrs/import/excel/apply', requireMutatingAuth, upload.single('file'), async (req, res) => {
+  if (!req.file?.buffer) {
+    return res.status(400).json({ ok: false, error: 'file_required' });
+  }
+
+  const parsed = parseWorkbook(req.file.buffer);
+  if (parsed.fileErrors.length > 0) {
+    return res.status(400).json({ ok: false, error: 'invalid_file', fileErrors: parsed.fileErrors });
+  }
+
+  let selectedRowNumbers: number[] | undefined;
+  if (Array.isArray(req.body?.selectedRowNumbers)) {
+    selectedRowNumbers = req.body.selectedRowNumbers
+      .map((v: any) => Number(v))
+      .filter((n: number) => Number.isFinite(n));
+  } else if (typeof req.body?.selectedRowNumbers === 'string' && req.body.selectedRowNumbers.trim()) {
+    selectedRowNumbers = req.body.selectedRowNumbers
+      .split(',')
+      .map((v: string) => Number(v.trim()))
+      .filter((n: number) => Number.isFinite(n));
+  }
+
+  const preview = await buildPreview(requesterUserId(req), parsed.rows);
+  const result = await applyPreviewSelection({
+    userId: requesterUserId(req),
+    previewRows: preview.rows,
+    selectedRowNumbers
+  });
+
+  return res.status(200).json({ ok: true, result, summary: preview.summary });
 });

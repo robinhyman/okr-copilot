@@ -15,6 +15,16 @@ export interface OkrInput {
   keyResults: KeyResultInput[];
 }
 
+export interface UserKeyResult {
+  id: number;
+  okr_id: number;
+  objective: string;
+  title: string;
+  target_value: number;
+  current_value: number;
+  unit: string;
+}
+
 async function hydrateOkr(okrId: number) {
   const okrRes = await pool.query(
     `SELECT id, user_id, objective, timeframe, created_at, updated_at FROM okrs WHERE id = $1`,
@@ -46,6 +56,24 @@ export async function listOkrsForUser(userId: string) {
     if (okr) okrs.push(okr);
   }
   return okrs;
+}
+
+export async function listKeyResultsForUser(userId: string): Promise<UserKeyResult[]> {
+  const res = await pool.query(
+    `SELECT kr.id, kr.okr_id, o.objective, kr.title, kr.target_value, kr.current_value, kr.unit
+     FROM key_results kr
+     JOIN okrs o ON o.id = kr.okr_id
+     WHERE o.user_id = $1`,
+    [userId]
+  );
+
+  return res.rows.map((row) => ({
+    ...row,
+    id: Number(row.id),
+    okr_id: Number(row.okr_id),
+    target_value: Number(row.target_value),
+    current_value: Number(row.current_value)
+  }));
 }
 
 export async function createOkr(input: OkrInput) {
@@ -114,7 +142,7 @@ export async function updateOkr(okrId: number, input: OkrInput) {
 export async function listKrCheckins(keyResultId: number, userId: string, limit = 10) {
   const safeLimit = Math.max(1, Math.min(limit, 50));
   const res = await pool.query(
-    `SELECT c.id, c.key_result_id, c.value, c.commentary, c.created_by_user_id, c.created_at
+    `SELECT c.id, c.key_result_id, c.value, c.commentary, c.source, c.created_by_user_id, c.created_at
      FROM kr_checkins c
      JOIN key_results kr ON kr.id = c.key_result_id
      JOIN okrs o ON o.id = kr.okr_id
@@ -136,15 +164,17 @@ export async function addKrCheckin(input: {
   userId: string;
   value: number;
   commentary?: string;
+  source?: string;
+  createdAt?: string;
 }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const checkin = await client.query(
-      `INSERT INTO kr_checkins (key_result_id, value, commentary, created_by_user_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, key_result_id, value, commentary, created_by_user_id, created_at`,
-      [input.keyResultId, input.value, input.commentary ?? null, input.userId]
+      `INSERT INTO kr_checkins (key_result_id, value, commentary, source, created_by_user_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()))
+       RETURNING id, key_result_id, value, commentary, source, created_by_user_id, created_at`,
+      [input.keyResultId, input.value, input.commentary ?? null, input.source ?? 'manual', input.userId, input.createdAt ?? null]
     );
 
     await client.query(`UPDATE key_results SET current_value = $2, updated_at = NOW() WHERE id = $1`, [
