@@ -86,7 +86,15 @@ okrsRouter.post('/api/okrs/chat', async (req, res) => {
 
   try {
     const result = await draftProvider.continueConversation(parsed.input);
-    return res.status(200).json({ ok: true, assistantMessage: result.assistantMessage, draft: result.draft, metadata: result.metadata });
+    return res.status(200).json({
+      ok: true,
+      assistantMessage: result.assistantMessage,
+      mode: result.mode,
+      questions: result.questions ?? [],
+      rationale: result.rationale ?? [],
+      draft: result.draft,
+      metadata: result.metadata
+    });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'chat_refinement_failed' });
   }

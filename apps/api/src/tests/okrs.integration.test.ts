@@ -185,11 +185,44 @@ test('chat endpoint refines a draft and returns assistant message', async () => 
 
     assert.equal(chatRes.status, 200);
     assert.equal(chatRes.body?.ok, true);
+    assert.equal(chatRes.body?.mode, 'refine');
     assert.equal(typeof chatRes.body?.assistantMessage, 'string');
     assert.ok(chatRes.body?.assistantMessage?.length > 0);
     assert.ok(Array.isArray(chatRes.body?.draft?.keyResults));
     assert.ok(chatRes.body?.draft?.keyResults?.length > 0);
     assert.ok(['llm', 'fallback'].includes(chatRes.body?.metadata?.source));
+  } finally {
+    if (priorKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = priorKey;
+    }
+  }
+});
+
+test('chat endpoint asks probing questions when context is underspecified', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const draftRes = await request(app).post('/api/okrs/draft').send({
+      focusArea: 'Client delivery',
+      timeframe: 'Q2 2026'
+    });
+
+    const chatRes = await request(app)
+      .post('/api/okrs/chat')
+      .send({
+        draft: draftRes.body?.draft,
+        messages: [{ role: 'user', content: 'help me improve this' }]
+      });
+
+    assert.equal(chatRes.status, 200);
+    assert.equal(chatRes.body?.ok, true);
+    assert.equal(chatRes.body?.mode, 'questions');
+    assert.ok(Array.isArray(chatRes.body?.questions));
+    assert.ok(chatRes.body?.questions?.length > 0);
   } finally {
     if (priorKey === undefined) {
       delete process.env.OPENAI_API_KEY;

@@ -38,6 +38,9 @@ export interface OkrConversationRequest {
 
 export interface OkrConversationResult {
   assistantMessage: string;
+  mode?: 'questions' | 'refine';
+  questions?: string[];
+  rationale?: string[];
   draft: OkrDraft;
   metadata: OkrDraftMetadata;
 }
@@ -166,6 +169,32 @@ class DeterministicDraftProvider {
       keyResults: baseDraft.keyResults.map((kr) => ({ ...kr }))
     };
 
+    const shouldProbe =
+      !instruction ||
+      ((instruction.includes('help') || instruction.includes('what should') || instruction.includes('not sure')) &&
+        !/\d/.test(instruction));
+
+    if (shouldProbe) {
+      const questions = [
+        'What is the single business outcome this objective must move this quarter (e.g. revenue, retention, activation)?',
+        'What are your current baseline values for the top 1–2 KRs so we can set realistic stretch targets?' 
+      ];
+
+      return {
+        assistantMessage: 'Before I rewrite, I need two quick answers so I can coach this properly and set measurable targets.',
+        mode: 'questions',
+        questions,
+        rationale: ['Missing baseline/priority context.', 'Avoiding vague targets or random ambition levels.'],
+        draft: normalizeDraftShape(revisedDraft, timeframe),
+        metadata: {
+          source: 'fallback',
+          provider: 'deterministic',
+          reason: 'llm_unavailable',
+          durationMs: 0
+        }
+      };
+    }
+
     if (instruction.includes('measurable')) {
       revisedDraft.keyResults = revisedDraft.keyResults.map((kr) => ({
         ...kr,
@@ -189,8 +218,10 @@ class DeterministicDraftProvider {
     return {
       assistantMessage:
         lastUserMessage?.content
-          ? `Updated. I applied your latest instruction: "${lastUserMessage.content}". If you want, I can now tighten any KR with stronger numbers and clearer success criteria.`
+          ? `Updated. I applied your latest instruction: "${lastUserMessage.content}".`
           : 'I can help refine this draft. Tell me what to change (e.g. “make KR2 more measurable” or “reduce ambition by 20%”).',
+      mode: 'refine',
+      rationale: ['Applied requested refinement with minimal draft changes.', 'Kept KRs measurable and realistic.'],
       draft: normalizeDraftShape(revisedDraft, timeframe),
       metadata: {
         source: 'fallback',
@@ -284,7 +315,7 @@ class OpenAiDraftProvider {
       {
         role: 'system',
         content:
-          'You are an OKR copilot. Continue the user conversation and refine the draft. Return JSON only with keys: assistantMessage (string) and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep draft realistic and measurable.'
+          'You are an OKR coaching copilot. Help users produce focused, measurable, realistic-but-ambitious OKRs through iterative conversation. If critical context is missing, ask up to 2 concise probing questions before major rewrites. Reject vague language unless quantified. Return JSON only with keys: assistantMessage (string), mode ("questions"|"refine"), questions (string[]), rationale (string[] max 3), and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep edits minimal unless asked for a reset.'
       },
       {
         role: 'user',
@@ -293,13 +324,30 @@ class OpenAiDraftProvider {
       ...safeMessages.map((message) => ({ role: message.role, content: message.content }))
     ]);
 
-    const payload = extractJsonObject(content) as { assistantMessage?: unknown; draft?: unknown };
+    const payload = extractJsonObject(content) as {
+      assistantMessage?: unknown;
+      mode?: unknown;
+      questions?: unknown;
+      rationale?: unknown;
+      draft?: unknown;
+    };
+
+    const questions = Array.isArray(payload.questions)
+      ? payload.questions.filter((q): q is string => typeof q === 'string' && q.trim().length > 0).slice(0, 2)
+      : [];
+
+    const rationale = Array.isArray(payload.rationale)
+      ? payload.rationale.filter((r): r is string => typeof r === 'string' && r.trim().length > 0).slice(0, 3)
+      : [];
 
     return {
       assistantMessage:
         typeof payload.assistantMessage === 'string' && payload.assistantMessage.trim()
           ? payload.assistantMessage.trim().slice(0, 1000)
           : 'I revised the draft. Tell me the next refinement you want.',
+      mode: payload.mode === 'questions' ? 'questions' : 'refine',
+      questions,
+      rationale,
       draft: normalizeDraftShape(payload.draft ?? baseDraft, timeframe),
       metadata: {
         source: 'llm',

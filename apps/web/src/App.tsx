@@ -31,6 +31,15 @@ type KrCheckin = {
 type Feedback = { type: 'info' | 'success' | 'error'; text: string };
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
+type ChatResponse = {
+  assistantMessage?: string;
+  mode?: 'questions' | 'refine';
+  questions?: string[];
+  rationale?: string[];
+  draft: Draft;
+  metadata?: DraftMetadata;
+};
+
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
 const chatStorageKey = 'okr-copilot.chat.v1';
@@ -257,7 +266,7 @@ export function App() {
     setFeedback({ type: 'info', text: 'Refining draft...' });
 
     try {
-      const response = await jsonFetch('/api/okrs/chat', {
+      const response = (await jsonFetch('/api/okrs/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -266,12 +275,22 @@ export function App() {
           focusArea,
           timeframe
         })
-      });
+      })) as ChatResponse;
 
       setDraft(response.draft);
       setDraftMetadata(response.metadata ?? null);
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: response.assistantMessage || 'Draft updated.' }]);
-      setFeedback({ type: 'success', text: 'Draft refined.' });
+
+      const coachingBits: string[] = [];
+      if (response.mode === 'questions' && Array.isArray(response.questions) && response.questions.length) {
+        coachingBits.push(`Questions:\n${response.questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`);
+      }
+      if (Array.isArray(response.rationale) && response.rationale.length) {
+        coachingBits.push(`Why:\n${response.rationale.map((r) => `- ${r}`).join('\n')}`);
+      }
+
+      const assistantContent = [response.assistantMessage || 'Draft updated.', ...coachingBits].join('\n\n');
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: assistantContent }]);
+      setFeedback({ type: 'success', text: response.mode === 'questions' ? 'Need answers to proceed.' : 'Draft refined.' });
     } catch (e: any) {
       setFeedback({ type: 'error', text: `Refinement failed: ${String(e?.message || e)}` });
     } finally {
