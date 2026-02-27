@@ -444,12 +444,14 @@ export function App() {
                 )}
 
                 <label>Objective</label>
-                <input
+                <textarea
+                  className="full-width-input objective-input"
                   value={active.objective}
                   onChange={(e) => setDraft({ ...(active as Draft), objective: e.target.value })}
                 />
                 <label>Timeframe</label>
                 <input
+                  className="full-width-input timeframe-input"
                   value={active.timeframe}
                   onChange={(e) => setDraft({ ...(active as Draft), timeframe: e.target.value })}
                 />
@@ -458,6 +460,7 @@ export function App() {
                 {active.keyResults.map((kr, index) => (
                   <div className="kr" key={kr.id ?? index}>
                     <input
+                      className="kr-title-input"
                       value={kr.title}
                       onChange={(e) => {
                         const next = [...active.keyResults];

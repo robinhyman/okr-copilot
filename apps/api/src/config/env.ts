@@ -49,7 +49,7 @@ export const env = {
   excelInputPath: process.env.EXCEL_INPUT_PATH ?? './data/sample-krs.xlsx',
   openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
   openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
-  okrDraftLlmTimeoutMs: toNumber(process.env.OKR_DRAFT_LLM_TIMEOUT_MS, 5000),
+  okrDraftLlmTimeoutMs: toNumber(process.env.OKR_DRAFT_LLM_TIMEOUT_MS, 15000),
   okrDraftInputMaxChars: toNumber(process.env.OKR_DRAFT_INPUT_MAX_CHARS, 240)
 };
 
