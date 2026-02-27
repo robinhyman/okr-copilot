@@ -35,6 +35,11 @@ const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
 const chatStorageKey = 'okr-copilot.chat.v1';
 
+type PersistedChatState = {
+  okrId: number;
+  messages: ChatMessage[];
+};
+
 const NAV_ITEMS: Array<{ path: RoutePath; label: string }> = [
   { path: '/overview', label: 'Overview' },
   { path: '/okrs', label: 'OKRs' },
@@ -117,38 +122,47 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // Only restore chat for persisted/saved OKRs; draft sessions are intentionally ephemeral.
+    if (draft) return;
+    const okrId = okrs[0]?.id;
+    if (!Number.isFinite(okrId)) return;
+
     try {
       const raw = window.localStorage.getItem(chatStorageKey);
       if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return;
+      const parsed = JSON.parse(raw) as PersistedChatState;
+      if (!parsed || parsed.okrId !== okrId || !Array.isArray(parsed.messages)) return;
 
-      const restored: ChatMessage[] = parsed
+      const restored: ChatMessage[] = parsed.messages
         .filter((message: any) => message && typeof message.content === 'string' && typeof message.role === 'string')
         .map((message: any) => {
           const role: ChatMessage['role'] = message.role === 'assistant' ? 'assistant' : 'user';
-          return {
-            role,
-            content: String(message.content)
-          };
+          return { role, content: String(message.content) };
         })
         .slice(-20);
 
-      if (restored.length) {
-        setChatMessages(restored);
-      }
+      setChatMessages(restored);
     } catch {
       // ignore local restore issues
     }
-  }, []);
+  }, [draft, okrs]);
 
   useEffect(() => {
+    // Scope persistence to a specific saved OKR id to avoid replaying stale chat on a different draft/context.
+    if (draft) return;
+    const okrId = okrs[0]?.id;
+    if (!Number.isFinite(okrId)) return;
+
     try {
-      window.localStorage.setItem(chatStorageKey, JSON.stringify(chatMessages.slice(-20)));
+      const payload: PersistedChatState = {
+        okrId,
+        messages: chatMessages.slice(-20)
+      };
+      window.localStorage.setItem(chatStorageKey, JSON.stringify(payload));
     } catch {
       // ignore local persistence issues
     }
-  }, [chatMessages]);
+  }, [chatMessages, draft, okrs]);
 
   async function refreshOkrs(): Promise<ApiOkr[]> {
     const response = await jsonFetch('/api/okrs');
