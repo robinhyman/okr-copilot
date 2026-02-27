@@ -87,6 +87,8 @@ export function App() {
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
   const [chatScopeOkrId, setChatScopeOkrId] = useState<number | null>(null);
+  const [isCoachingSessionActive, setIsCoachingSessionActive] = useState(false);
+  const [isDraftReadyFromChat, setIsDraftReadyFromChat] = useState(false);
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -106,6 +108,8 @@ export function App() {
   }, [draft, okrs]);
 
   const validationErrors = useMemo(() => validateDraft(active), [active]);
+  const showDraftEditor = Boolean(active) && (!isCoachingSessionActive || isDraftReadyFromChat);
+  const editableDraft = showDraftEditor ? (active as Draft) : null;
 
   const overviewStats = useMemo(() => {
     const keyResults = okrs[0]?.keyResults ?? [];
@@ -231,25 +235,20 @@ export function App() {
 
   async function generateDraft() {
     setIsGenerating(true);
-    setFeedback({ type: 'info', text: 'Generating draft...' });
     try {
-      const response = await jsonFetch('/api/okrs/draft', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ focusArea, timeframe })
-      });
-      setDraft(response.draft);
-      setDraftMetadata(response.metadata ?? null);
+      setDraft(null);
+      setDraftMetadata(null);
+      setIsCoachingSessionActive(true);
+      setIsDraftReadyFromChat(false);
       setChatScopeOkrId(null);
       setChatMessages([
         {
           role: 'assistant',
-          content: 'Draft ready. Tell me what to refine (e.g. “make KR2 more measurable” or “reduce ambition by 20%”).'
+          content:
+            'Great — what would you like to craft an OKR for? Share context (outcome, constraints, current baseline, and timeframe), and I’ll coach you to a strong first draft.'
         }
       ]);
-      setFeedback({ type: 'success', text: 'Draft generated. Review and refine in chat, then save.' });
-    } catch (e: any) {
-      setFeedback({ type: 'error', text: `Draft generation failed: ${String(e?.message || e)}` });
+      setFeedback({ type: 'info', text: 'Coaching started. Tell me what you want to achieve.' });
     } finally {
       setIsGenerating(false);
     }
@@ -258,6 +257,10 @@ export function App() {
   async function sendChatTurn() {
     const trimmed = chatInput.trim();
     if (!trimmed || isChatting) return;
+
+    if (!isCoachingSessionActive) {
+      setIsCoachingSessionActive(true);
+    }
 
     const nextMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: trimmed }];
     setChatMessages(nextMessages);
@@ -277,8 +280,11 @@ export function App() {
         })
       })) as ChatResponse;
 
-      setDraft(response.draft);
-      setDraftMetadata(response.metadata ?? null);
+      if (response.mode === 'refine') {
+        setDraft(response.draft);
+        setDraftMetadata(response.metadata ?? null);
+        setIsDraftReadyFromChat(true);
+      }
 
       const coachingBits: string[] = [];
       if (response.mode === 'questions' && Array.isArray(response.questions) && response.questions.length) {
@@ -290,7 +296,10 @@ export function App() {
 
       const assistantContent = [response.assistantMessage || 'Draft updated.', ...coachingBits].join('\n\n');
       setChatMessages((prev) => [...prev, { role: 'assistant', content: assistantContent }]);
-      setFeedback({ type: 'success', text: response.mode === 'questions' ? 'Need answers to proceed.' : 'Draft refined.' });
+      setFeedback({
+        type: 'success',
+        text: response.mode === 'questions' ? 'Good context. A couple of questions before first draft.' : 'Draft ready/refined.'
+      });
     } catch (e: any) {
       setFeedback({ type: 'error', text: `Refinement failed: ${String(e?.message || e)}` });
     } finally {
@@ -337,6 +346,8 @@ export function App() {
       if (Number.isFinite(persistedOkrId)) {
         setChatScopeOkrId(persistedOkrId);
       }
+      setIsCoachingSessionActive(false);
+      setIsDraftReadyFromChat(false);
       await refreshCheckinHistory(rows);
       setFeedback({ type: 'success', text: isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.' });
     } catch (e: any) {
@@ -450,11 +461,10 @@ export function App() {
 
             <div className="panel nested">
               <h3>Draft generator</h3>
+              <p className="muted">Start with a short coaching chat. Describe what you want to achieve, then we’ll shape the first draft together.</p>
               <div className="row">
-                <input value={focusArea} onChange={(e) => setFocusArea(e.target.value)} placeholder="Focus area" />
-                <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="Timeframe" />
                 <button disabled={isGenerating} onClick={() => generateDraft()}>
-                  {isGenerating ? 'Generating...' : 'Generate draft'}
+                  {isGenerating ? 'Starting...' : 'Generate draft'}
                 </button>
               </div>
             </div>
@@ -463,7 +473,7 @@ export function App() {
               <h3>Draft refinement chat</h3>
               <div className="chat-thread">
                 {!chatMessages.length && (
-                  <p className="muted">Start by generating a draft, then refine it here in conversation.</p>
+                  <p className="muted">Click “Generate draft” to start coaching. Begin by describing what you want to achieve.</p>
                 )}
                 {chatMessages.map((message, index) => (
                   <div key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
@@ -483,13 +493,13 @@ export function App() {
                     }
                   }}
                 />
-                <button disabled={isChatting || !chatInput.trim() || !active} onClick={() => sendChatTurn()}>
-                  {isChatting ? 'Refining...' : 'Send'}
+                <button disabled={isChatting || !chatInput.trim()} onClick={() => sendChatTurn()}>
+                  {isChatting ? 'Thinking...' : 'Send'}
                 </button>
               </div>
             </div>
 
-            {active ? (
+            {showDraftEditor ? (
               <>
                 {!!draftMetadata && (
                   <p className="badge">
@@ -501,35 +511,35 @@ export function App() {
                 <label>Objective</label>
                 <textarea
                   className="full-width-input objective-input"
-                  value={active.objective}
-                  onChange={(e) => setDraft({ ...(active as Draft), objective: e.target.value })}
+                  value={editableDraft!.objective}
+                  onChange={(e) => setDraft({ ...editableDraft!, objective: e.target.value })}
                 />
                 <label>Timeframe</label>
                 <input
                   className="full-width-input timeframe-input"
-                  value={active.timeframe}
-                  onChange={(e) => setDraft({ ...(active as Draft), timeframe: e.target.value })}
+                  value={editableDraft!.timeframe}
+                  onChange={(e) => setDraft({ ...editableDraft!, timeframe: e.target.value })}
                 />
 
                 <h3>Key Results</h3>
-                {active.keyResults.map((kr, index) => (
+                {editableDraft!.keyResults.map((kr, index) => (
                   <div className="kr" key={kr.id ?? index}>
                     <input
                       className="kr-title-input"
                       value={kr.title}
                       onChange={(e) => {
-                        const next = [...active.keyResults];
+                        const next = [...editableDraft!.keyResults];
                         next[index] = { ...kr, title: e.target.value };
-                        setDraft({ ...(active as Draft), keyResults: next });
+                        setDraft({ ...editableDraft!, keyResults: next });
                       }}
                     />
                     <input
                       type="number"
                       value={kr.currentValue}
                       onChange={(e) => {
-                        const next = [...active.keyResults];
+                        const next = [...editableDraft!.keyResults];
                         next[index] = { ...kr, currentValue: Number(e.target.value || 0) };
-                        setDraft({ ...(active as Draft), keyResults: next });
+                        setDraft({ ...editableDraft!, keyResults: next });
                       }}
                     />
                     <span>/</span>
@@ -537,17 +547,17 @@ export function App() {
                       type="number"
                       value={kr.targetValue}
                       onChange={(e) => {
-                        const next = [...active.keyResults];
+                        const next = [...editableDraft!.keyResults];
                         next[index] = { ...kr, targetValue: Number(e.target.value || 0) };
-                        setDraft({ ...(active as Draft), keyResults: next });
+                        setDraft({ ...editableDraft!, keyResults: next });
                       }}
                     />
                     <input
                       value={kr.unit}
                       onChange={(e) => {
-                        const next = [...active.keyResults];
+                        const next = [...editableDraft!.keyResults];
                         next[index] = { ...kr, unit: e.target.value };
-                        setDraft({ ...(active as Draft), keyResults: next });
+                        setDraft({ ...editableDraft!, keyResults: next });
                       }}
                     />
                   </div>
@@ -568,7 +578,11 @@ export function App() {
                 </div>
               </>
             ) : (
-              <p>No draft or saved OKR found yet. Generate a draft to get started.</p>
+              <p>
+                {isCoachingSessionActive
+                  ? 'We’re in coaching mode — answer the questions in chat and your first draft will appear here.'
+                  : 'No draft or saved OKR found yet. Generate a draft to get started.'}
+              </p>
             )}
           </section>
         )}

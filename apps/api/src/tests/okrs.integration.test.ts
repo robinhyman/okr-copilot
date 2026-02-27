@@ -176,12 +176,30 @@ test('chat endpoint refines a draft and returns assistant message', async () => 
 
     assert.equal(draftRes.status, 200);
 
-    const chatRes = await request(app)
+    const firstChatRes = await request(app)
       .post('/api/okrs/chat')
       .send({
         draft: draftRes.body?.draft,
         messages: [{ role: 'user', content: 'make all key results measurable and reduce ambition by 20%' }]
       });
+
+    assert.equal(firstChatRes.status, 200);
+    assert.equal(firstChatRes.body?.ok, true);
+    assert.ok(['questions', 'refine'].includes(firstChatRes.body?.mode));
+
+    const chatRes =
+      firstChatRes.body?.mode === 'refine'
+        ? firstChatRes
+        : await request(app)
+            .post('/api/okrs/chat')
+            .send({
+              draft: firstChatRes.body?.draft,
+              messages: [
+                { role: 'user', content: 'make all key results measurable and reduce ambition by 20%' },
+                { role: 'assistant', content: firstChatRes.body?.assistantMessage || '' },
+                { role: 'user', content: 'Baseline is 3 shipped playbooks per quarter, target 5 this quarter.' }
+              ]
+            });
 
     assert.equal(chatRes.status, 200);
     assert.equal(chatRes.body?.ok, true);

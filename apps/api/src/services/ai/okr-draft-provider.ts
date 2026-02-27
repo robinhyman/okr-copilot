@@ -161,7 +161,9 @@ class DeterministicDraftProvider {
   continueConversation(input: OkrConversationRequest): OkrConversationResult {
     const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
     const baseDraft = input.draft ? normalizeDraftShape(input.draft, timeframe) : this.generate(input);
-    const lastUserMessage = [...sanitizeMessages(input.messages)].reverse().find((message) => message.role === 'user');
+    const safeMessages = sanitizeMessages(input.messages);
+    const userTurns = safeMessages.filter((message) => message.role === 'user').length;
+    const lastUserMessage = [...safeMessages].reverse().find((message) => message.role === 'user');
     const instruction = (lastUserMessage?.content || '').toLowerCase();
 
     const revisedDraft: OkrDraft = {
@@ -170,6 +172,7 @@ class DeterministicDraftProvider {
     };
 
     const shouldProbe =
+      userTurns < 2 ||
       !instruction ||
       ((instruction.includes('help') || instruction.includes('what should') || instruction.includes('not sure')) &&
         !/\d/.test(instruction));
@@ -315,7 +318,7 @@ class OpenAiDraftProvider {
       {
         role: 'system',
         content:
-          'You are an OKR coaching copilot. Help users produce focused, measurable, realistic-but-ambitious OKRs through iterative conversation. If critical context is missing, ask up to 2 concise probing questions before major rewrites. Reject vague language unless quantified. Return JSON only with keys: assistantMessage (string), mode ("questions"|"refine"), questions (string[]), rationale (string[] max 3), and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep edits minimal unless asked for a reset.'
+          'You are an OKR coaching copilot. Help users produce focused, measurable, realistic-but-ambitious OKRs through iterative conversation. Before producing the first serious draft, run a short coaching conversation: ask 1-2 concise probing questions to clarify business outcome, baseline, constraints, and timeframe. If context is still missing, stay in question mode. Reject vague language unless quantified. Return JSON only with keys: assistantMessage (string), mode ("questions"|"refine"), questions (string[]), rationale (string[] max 3), and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep edits minimal unless asked for a reset.'
       },
       {
         role: 'user',
