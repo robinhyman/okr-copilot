@@ -31,8 +31,23 @@ type KrCheckin = {
 type Feedback = { type: 'info' | 'success' | 'error'; text: string };
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
+type ChatResponse = {
+  assistantMessage?: string;
+  mode?: 'questions' | 'refine';
+  questions?: string[];
+  rationale?: string[];
+  draft: Draft;
+  metadata?: DraftMetadata;
+};
+
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
+const chatStorageKey = 'okr-copilot.chat.v1';
+
+type PersistedChatState = {
+  okrId: number;
+  messages: ChatMessage[];
+};
 
 const NAV_ITEMS: Array<{ path: RoutePath; label: string }> = [
   { path: '/overview', label: 'Overview' },
@@ -71,6 +86,7 @@ export function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
+  const [chatScopeOkrId, setChatScopeOkrId] = useState<number | null>(null);
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -114,6 +130,62 @@ export function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  useEffect(() => {
+    // Only restore chat for persisted/saved OKRs; draft sessions are intentionally ephemeral.
+    if (draft) return;
+    const okrId = okrs[0]?.id;
+    if (!Number.isFinite(okrId)) return;
+
+    const shouldAttemptRestore = chatMessages.length === 0 || chatScopeOkrId !== okrId;
+    if (!shouldAttemptRestore) return;
+
+    try {
+      const raw = window.localStorage.getItem(chatStorageKey);
+      if (!raw) {
+        if (chatScopeOkrId !== okrId) setChatMessages([]);
+        setChatScopeOkrId(okrId);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as PersistedChatState;
+      if (!parsed || parsed.okrId !== okrId || !Array.isArray(parsed.messages)) {
+        if (chatScopeOkrId !== okrId) setChatMessages([]);
+        setChatScopeOkrId(okrId);
+        return;
+      }
+
+      const restored: ChatMessage[] = parsed.messages
+        .filter((message: any) => message && typeof message.content === 'string' && typeof message.role === 'string')
+        .map((message: any) => {
+          const role: ChatMessage['role'] = message.role === 'assistant' ? 'assistant' : 'user';
+          return { role, content: String(message.content) };
+        })
+        .slice(-20);
+
+      setChatMessages(restored);
+      setChatScopeOkrId(okrId);
+    } catch {
+      // ignore local restore issues
+    }
+  }, [draft, okrs, chatMessages.length, chatScopeOkrId]);
+
+  useEffect(() => {
+    // Scope persistence to a specific saved OKR id to avoid replaying stale chat on a different draft/context.
+    if (draft) return;
+    const okrId = okrs[0]?.id;
+    if (!Number.isFinite(okrId)) return;
+
+    try {
+      const payload: PersistedChatState = {
+        okrId,
+        messages: chatMessages.slice(-20)
+      };
+      window.localStorage.setItem(chatStorageKey, JSON.stringify(payload));
+    } catch {
+      // ignore local persistence issues
+    }
+  }, [chatMessages, draft, okrs]);
 
   async function refreshOkrs(): Promise<ApiOkr[]> {
     const response = await jsonFetch('/api/okrs');
@@ -168,6 +240,7 @@ export function App() {
       });
       setDraft(response.draft);
       setDraftMetadata(response.metadata ?? null);
+      setChatScopeOkrId(null);
       setChatMessages([
         {
           role: 'assistant',
@@ -193,7 +266,7 @@ export function App() {
     setFeedback({ type: 'info', text: 'Refining draft...' });
 
     try {
-      const response = await jsonFetch('/api/okrs/chat', {
+      const response = (await jsonFetch('/api/okrs/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -202,12 +275,22 @@ export function App() {
           focusArea,
           timeframe
         })
-      });
+      })) as ChatResponse;
 
       setDraft(response.draft);
       setDraftMetadata(response.metadata ?? null);
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: response.assistantMessage || 'Draft updated.' }]);
-      setFeedback({ type: 'success', text: 'Draft refined.' });
+
+      const coachingBits: string[] = [];
+      if (response.mode === 'questions' && Array.isArray(response.questions) && response.questions.length) {
+        coachingBits.push(`Questions:\n${response.questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`);
+      }
+      if (Array.isArray(response.rationale) && response.rationale.length) {
+        coachingBits.push(`Why:\n${response.rationale.map((r) => `- ${r}`).join('\n')}`);
+      }
+
+      const assistantContent = [response.assistantMessage || 'Draft updated.', ...coachingBits].join('\n\n');
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: assistantContent }]);
+      setFeedback({ type: 'success', text: response.mode === 'questions' ? 'Need answers to proceed.' : 'Draft refined.' });
     } catch (e: any) {
       setFeedback({ type: 'error', text: `Refinement failed: ${String(e?.message || e)}` });
     } finally {
@@ -244,9 +327,16 @@ export function App() {
         body: JSON.stringify(payload)
       });
 
+      if (Number.isFinite(existingId)) {
+        setChatScopeOkrId(existingId as number);
+      }
       setDraft(null);
       setDraftMetadata(null);
       const rows = await refreshOkrs();
+      const persistedOkrId = rows[0]?.id;
+      if (Number.isFinite(persistedOkrId)) {
+        setChatScopeOkrId(persistedOkrId);
+      }
       await refreshCheckinHistory(rows);
       setFeedback({ type: 'success', text: isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.' });
     } catch (e: any) {
@@ -409,12 +499,14 @@ export function App() {
                 )}
 
                 <label>Objective</label>
-                <input
+                <textarea
+                  className="full-width-input objective-input"
                   value={active.objective}
                   onChange={(e) => setDraft({ ...(active as Draft), objective: e.target.value })}
                 />
                 <label>Timeframe</label>
                 <input
+                  className="full-width-input timeframe-input"
                   value={active.timeframe}
                   onChange={(e) => setDraft({ ...(active as Draft), timeframe: e.target.value })}
                 />
@@ -423,6 +515,7 @@ export function App() {
                 {active.keyResults.map((kr, index) => (
                   <div className="kr" key={kr.id ?? index}>
                     <input
+                      className="kr-title-input"
                       value={kr.title}
                       onChange={(e) => {
                         const next = [...active.keyResults];

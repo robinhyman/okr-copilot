@@ -86,11 +86,34 @@ body {
   color: #4b5563;
 }
 
-input {
+input,
+textarea {
   border: 1px solid #d1d5db;
   border-radius: 8px;
   padding: 0.45rem 0.6rem;
   min-width: 110px;
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.full-width-input {
+  width: min(760px, 100%);
+}
+
+.objective-input {
+  min-height: 96px;
+  line-height: 1.4;
+}
+
+.timeframe-input {
+  max-width: 260px;
+}
+
+.kr-title-input {
+  width: min(640px, 100%);
 }
 
 label {
