@@ -197,7 +197,11 @@ test('chat endpoint refines a draft and returns assistant message', async () => 
               messages: [
                 { role: 'user', content: 'make all key results measurable and reduce ambition by 20%' },
                 { role: 'assistant', content: firstChatRes.body?.assistantMessage || '' },
-                { role: 'user', content: 'Baseline is 3 shipped playbooks per quarter, target 5 this quarter.' }
+                {
+                  role: 'user',
+                  content:
+                    'Baseline is 3 shipped playbooks per quarter, target 5 this quarter. Constraints: team of 2 and no extra budget. Timeframe: Q2 2026.'
+                }
               ]
             });
 

@@ -155,6 +155,12 @@ button.secondary {
   overflow: auto;
 }
 
+.chat-input {
+  width: min(860px, 100%);
+  min-height: 140px;
+  line-height: 1.4;
+}
+
 .chat-message {
   border-radius: 8px;
   padding: 0.5rem 0.65rem;

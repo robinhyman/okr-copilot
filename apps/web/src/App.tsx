@@ -31,11 +31,20 @@ type KrCheckin = {
 type Feedback = { type: 'info' | 'success' | 'error'; text: string };
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
+type CoachingContext = {
+  outcome?: string;
+  baseline?: string;
+  constraints?: string;
+  timeframe?: string;
+};
+
 type ChatResponse = {
   assistantMessage?: string;
   mode?: 'questions' | 'refine';
   questions?: string[];
   rationale?: string[];
+  coachingContext?: CoachingContext;
+  missingContext?: string[];
   draft: Draft;
   metadata?: DraftMetadata;
 };
@@ -89,6 +98,8 @@ export function App() {
   const [chatScopeOkrId, setChatScopeOkrId] = useState<number | null>(null);
   const [isCoachingSessionActive, setIsCoachingSessionActive] = useState(false);
   const [isDraftReadyFromChat, setIsDraftReadyFromChat] = useState(false);
+  const [coachingContext, setCoachingContext] = useState<CoachingContext>({});
+  const [missingContext, setMissingContext] = useState<string[]>([]);
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -240,6 +251,8 @@ export function App() {
       setDraftMetadata(null);
       setIsCoachingSessionActive(true);
       setIsDraftReadyFromChat(false);
+      setCoachingContext({});
+      setMissingContext(['outcome', 'baseline', 'constraints', 'timeframe']);
       setChatScopeOkrId(null);
       setChatMessages([
         {
@@ -254,8 +267,8 @@ export function App() {
     }
   }
 
-  async function sendChatTurn() {
-    const trimmed = chatInput.trim();
+  async function sendChatTurn(prefilled?: string) {
+    const trimmed = (prefilled ?? chatInput).trim();
     if (!trimmed || isChatting) return;
 
     if (!isCoachingSessionActive) {
@@ -279,6 +292,9 @@ export function App() {
           timeframe
         })
       })) as ChatResponse;
+
+      setCoachingContext(response.coachingContext ?? {});
+      setMissingContext(response.missingContext ?? []);
 
       if (response.mode === 'refine') {
         setDraft(response.draft);
@@ -305,6 +321,11 @@ export function App() {
     } finally {
       setIsChatting(false);
     }
+  }
+
+  async function requestFirstDraftNow() {
+    if (isChatting) return;
+    await sendChatTurn('Generate the first draft now using the captured context.');
   }
 
   async function saveOkr() {
@@ -348,6 +369,7 @@ export function App() {
       }
       setIsCoachingSessionActive(false);
       setIsDraftReadyFromChat(false);
+      setMissingContext([]);
       await refreshCheckinHistory(rows);
       setFeedback({ type: 'success', text: isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.' });
     } catch (e: any) {
@@ -481,13 +503,27 @@ export function App() {
                   </div>
                 ))}
               </div>
+              <div className="panel nested">
+                <h4>Captured context</h4>
+                <ul className="history">
+                  <li><strong>Outcome:</strong> {coachingContext.outcome || '—'}</li>
+                  <li><strong>Baseline:</strong> {coachingContext.baseline || '—'}</li>
+                  <li><strong>Constraints:</strong> {coachingContext.constraints || '—'}</li>
+                  <li><strong>Timeframe:</strong> {coachingContext.timeframe || '—'}</li>
+                </ul>
+                {!!missingContext.length && <p className="muted">Still needed: {missingContext.join(', ')}</p>}
+                <button disabled={isChatting || missingContext.length > 0} onClick={() => requestFirstDraftNow()}>
+                  Generate first draft now
+                </button>
+              </div>
               <div className="row">
-                <input
+                <textarea
+                  className="chat-input"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Ask for a refinement…"
+                  placeholder="Describe what you want to achieve, constraints, baseline, and timeframe… (Ctrl/Cmd+Enter to send)"
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                       e.preventDefault();
                       void sendChatTurn();
                     }

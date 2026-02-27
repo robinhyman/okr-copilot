@@ -92,6 +92,8 @@ okrsRouter.post('/api/okrs/chat', async (req, res) => {
       mode: result.mode,
       questions: result.questions ?? [],
       rationale: result.rationale ?? [],
+      coachingContext: result.coachingContext ?? {},
+      missingContext: result.missingContext ?? [],
       draft: result.draft,
       metadata: result.metadata
     });

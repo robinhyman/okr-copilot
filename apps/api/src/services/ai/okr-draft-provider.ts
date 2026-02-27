@@ -36,11 +36,20 @@ export interface OkrConversationRequest {
   timeframe?: string;
 }
 
+export interface OkrCoachingContext {
+  outcome?: string;
+  baseline?: string;
+  constraints?: string;
+  timeframe?: string;
+}
+
 export interface OkrConversationResult {
   assistantMessage: string;
   mode?: 'questions' | 'refine';
   questions?: string[];
   rationale?: string[];
+  coachingContext?: OkrCoachingContext;
+  missingContext?: string[];
   draft: OkrDraft;
   metadata: OkrDraftMetadata;
 }
@@ -134,6 +143,39 @@ function sanitizeMessages(messages: OkrConversationMessage[]): OkrConversationMe
     .slice(-MAX_MESSAGES);
 }
 
+function extractCoachingContext(messages: OkrConversationMessage[], timeframeFallback: string): OkrCoachingContext {
+  const userText = messages
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content)
+    .join('\n');
+  const lower = userText.toLowerCase();
+
+  const outcomeMatch = userText.match(/(?:outcome|goal|achieve|want to)[:\- ]+(.+)/i);
+  const baselineMatch = userText.match(/(?:baseline|current|currently|from)[:\- ]+(.+)/i);
+  const constraintsMatch = userText.match(/(?:constraint|constraints|limit|team|budget|time)[:\- ]+(.+)/i);
+  const timeframeMatch = userText.match(/(?:q[1-4]\s*20\d\d|this quarter|this month|\d+\s*(?:weeks?|months?))/i);
+
+  return {
+    outcome: outcomeMatch?.[1]?.trim() || (lower.includes('increase') || lower.includes('reduce') ? userText.slice(0, 120) : undefined),
+    baseline: baselineMatch?.[1]?.trim() || (/(from\s+\d+)|(current\s+\d+)/i.test(userText) ? userText.slice(0, 120) : undefined),
+    constraints: constraintsMatch?.[1]?.trim() || (/(team|budget|time|resource)/i.test(userText) ? userText.slice(0, 120) : undefined),
+    timeframe: timeframeMatch?.[0]?.trim() || timeframeFallback
+  };
+}
+
+function getMissingContext(ctx: OkrCoachingContext): string[] {
+  const missing: string[] = [];
+  if (!ctx.outcome) missing.push('outcome');
+  if (!ctx.baseline) missing.push('baseline');
+  if (!ctx.constraints) missing.push('constraints');
+  if (!ctx.timeframe) missing.push('timeframe');
+  return missing;
+}
+
+function isKrFormatValid(title: string): boolean {
+  return /^(increase|decrease|reduce|grow|improve)\s.+\sfrom\s.+\sto\s.+$/i.test(title.trim());
+}
+
 class DeterministicDraftProvider {
   generate(input: OkrDraftRequest): OkrDraft {
     const focus = capText(input.focusArea, DEFAULT_FOCUS);
@@ -145,13 +187,13 @@ class DeterministicDraftProvider {
         timeframe,
         keyResults: [
           {
-            title: `Launch 2 repeatable ${focus.toLowerCase()} playbooks`,
+            title: `Increase repeatable ${focus.toLowerCase()} playbooks from 0 to 2`,
             targetValue: 2,
             currentValue: 0,
             unit: 'playbooks'
           },
-          { title: 'Increase weekly stakeholder satisfaction score', targetValue: 8, currentValue: 5, unit: '/10' },
-          { title: 'Reduce cycle time for priority initiatives', targetValue: 20, currentValue: 0, unit: '%' }
+          { title: 'Increase stakeholder satisfaction score from 5 to 8', targetValue: 8, currentValue: 5, unit: '/10' },
+          { title: 'Reduce cycle time from 20 to 12', targetValue: 12, currentValue: 20, unit: 'days' }
         ]
       },
       timeframe
@@ -165,29 +207,34 @@ class DeterministicDraftProvider {
     const userTurns = safeMessages.filter((message) => message.role === 'user').length;
     const lastUserMessage = [...safeMessages].reverse().find((message) => message.role === 'user');
     const instruction = (lastUserMessage?.content || '').toLowerCase();
+    const coachingContext = extractCoachingContext(safeMessages, timeframe);
+    const missingContext = getMissingContext(coachingContext);
 
     const revisedDraft: OkrDraft = {
       ...baseDraft,
+      timeframe: coachingContext.timeframe || baseDraft.timeframe,
       keyResults: baseDraft.keyResults.map((kr) => ({ ...kr }))
     };
 
-    const shouldProbe =
-      userTurns < 2 ||
-      !instruction ||
-      ((instruction.includes('help') || instruction.includes('what should') || instruction.includes('not sure')) &&
-        !/\d/.test(instruction));
+    const shouldProbe = userTurns < 2 || missingContext.length > 0;
 
     if (shouldProbe) {
       const questions = [
-        'What is the single business outcome this objective must move this quarter (e.g. revenue, retention, activation)?',
-        'What are your current baseline values for the top 1–2 KRs so we can set realistic stretch targets?' 
+        missingContext.includes('outcome')
+          ? 'What single business outcome should this OKR move (e.g. revenue, retention, activation)?'
+          : 'What is the priority tradeoff to optimize for (speed, quality, or efficiency)?',
+        missingContext.includes('baseline')
+          ? 'What are your current baseline numbers so we can set targets from a known starting point?'
+          : 'Any hard constraints (team size, budget, time) I should factor into ambition?'
       ];
 
       return {
-        assistantMessage: 'Before I rewrite, I need two quick answers so I can coach this properly and set measurable targets.',
+        assistantMessage: 'Great start. Before I generate the first draft, I need a bit more context.',
         mode: 'questions',
         questions,
-        rationale: ['Missing baseline/priority context.', 'Avoiding vague targets or random ambition levels.'],
+        rationale: ['Coaching-first flow keeps first draft grounded in real constraints and baselines.'],
+        coachingContext,
+        missingContext,
         draft: normalizeDraftShape(revisedDraft, timeframe),
         metadata: {
           source: 'fallback',
@@ -218,6 +265,33 @@ class DeterministicDraftProvider {
         : `Achieve ${revisedDraft.objective.charAt(0).toLowerCase()}${revisedDraft.objective.slice(1)}`;
     }
 
+    revisedDraft.keyResults = revisedDraft.keyResults.map((kr) => {
+      if (isKrFormatValid(kr.title)) return kr;
+      return {
+        ...kr,
+        title: `Increase ${kr.title.replace(/^(increase|decrease|reduce|grow|improve)\s+/i, '').toLowerCase()} from ${kr.currentValue} to ${kr.targetValue}`
+      };
+    });
+
+    const invalidFormat = revisedDraft.keyResults.filter((kr) => !isKrFormatValid(kr.title));
+    if (invalidFormat.length) {
+      return {
+        assistantMessage: 'Before first draft, I need to tighten KR wording to measurable format.',
+        mode: 'questions',
+        questions: ['Please confirm each KR should be phrased as: <direction> <metric> from <baseline> to <target>.'],
+        rationale: ['Enforcing measurable KR structure.'],
+        coachingContext,
+        missingContext: [],
+        draft: normalizeDraftShape(revisedDraft, timeframe),
+        metadata: {
+          source: 'fallback',
+          provider: 'deterministic',
+          reason: 'quality_gate_failed',
+          durationMs: 0
+        }
+      };
+    }
+
     return {
       assistantMessage:
         lastUserMessage?.content
@@ -225,6 +299,8 @@ class DeterministicDraftProvider {
           : 'I can help refine this draft. Tell me what to change (e.g. “make KR2 more measurable” or “reduce ambition by 20%”).',
       mode: 'refine',
       rationale: ['Applied requested refinement with minimal draft changes.', 'Kept KRs measurable and realistic.'],
+      coachingContext,
+      missingContext: [],
       draft: normalizeDraftShape(revisedDraft, timeframe),
       metadata: {
         source: 'fallback',
@@ -318,7 +394,7 @@ class OpenAiDraftProvider {
       {
         role: 'system',
         content:
-          'You are an OKR coaching copilot. Help users produce focused, measurable, realistic-but-ambitious OKRs through iterative conversation. Before producing the first serious draft, run a short coaching conversation: ask 1-2 concise probing questions to clarify business outcome, baseline, constraints, and timeframe. If context is still missing, stay in question mode. Reject vague language unless quantified. Return JSON only with keys: assistantMessage (string), mode ("questions"|"refine"), questions (string[]), rationale (string[] max 3), and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep edits minimal unless asked for a reset.'
+          'You are an OKR coaching copilot. Help users produce focused, measurable, realistic-but-ambitious OKRs through iterative conversation. Before producing the first serious draft, run a short coaching conversation: ask 1-2 concise probing questions to clarify business outcome, baseline, constraints, and timeframe. If context is still missing, stay in question mode. Reject vague language unless quantified. CRITICAL KR TITLE FORMAT: each key result title must follow <direction> <metric> from <from-value> to <to-value> (e.g. increase employee engagement score from 5 to 7). Return JSON only with keys: assistantMessage (string), mode ("questions"|"refine"), questions (string[]), rationale (string[] max 3), coachingContext (object with outcome, baseline, constraints, timeframe), missingContext (string[]), and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep edits minimal unless asked for a reset.'
       },
       {
         role: 'user',
@@ -332,6 +408,8 @@ class OpenAiDraftProvider {
       mode?: unknown;
       questions?: unknown;
       rationale?: unknown;
+      coachingContext?: unknown;
+      missingContext?: unknown;
       draft?: unknown;
     };
 
@@ -343,15 +421,39 @@ class OpenAiDraftProvider {
       ? payload.rationale.filter((r): r is string => typeof r === 'string' && r.trim().length > 0).slice(0, 3)
       : [];
 
+    const coachingContextRaw = payload.coachingContext && typeof payload.coachingContext === 'object'
+      ? (payload.coachingContext as Record<string, unknown>)
+      : {};
+
+    const coachingContext: OkrCoachingContext = {
+      outcome: typeof coachingContextRaw.outcome === 'string' ? coachingContextRaw.outcome : undefined,
+      baseline: typeof coachingContextRaw.baseline === 'string' ? coachingContextRaw.baseline : undefined,
+      constraints: typeof coachingContextRaw.constraints === 'string' ? coachingContextRaw.constraints : undefined,
+      timeframe: typeof coachingContextRaw.timeframe === 'string' ? coachingContextRaw.timeframe : undefined
+    };
+
+    const normalizedDraft = normalizeDraftShape(payload.draft ?? baseDraft, timeframe);
+    const missingContext = Array.isArray(payload.missingContext)
+      ? payload.missingContext.filter((m): m is string => typeof m === 'string').slice(0, 6)
+      : getMissingContext({ ...extractCoachingContext(safeMessages, timeframe), ...coachingContext });
+
+    const hasBadKrFormat = normalizedDraft.keyResults.some((kr) => !isKrFormatValid(kr.title));
+    const gatedMode = missingContext.length > 0 || hasBadKrFormat ? 'questions' : payload.mode === 'questions' ? 'questions' : 'refine';
+
     return {
       assistantMessage:
         typeof payload.assistantMessage === 'string' && payload.assistantMessage.trim()
           ? payload.assistantMessage.trim().slice(0, 1000)
           : 'I revised the draft. Tell me the next refinement you want.',
-      mode: payload.mode === 'questions' ? 'questions' : 'refine',
-      questions,
+      mode: gatedMode,
+      questions:
+        gatedMode === 'questions' && questions.length === 0
+          ? ['Please provide missing baseline, constraints, and confirm KR format as <direction> <metric> from <from> to <to>.']
+          : questions,
       rationale,
-      draft: normalizeDraftShape(payload.draft ?? baseDraft, timeframe),
+      coachingContext,
+      missingContext,
+      draft: normalizedDraft,
       metadata: {
         source: 'llm',
         provider: 'openai',
