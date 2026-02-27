@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { requireMutatingAuth } from '../middleware/auth-guard.js';
 import { addKrCheckin, createOkr, listKrCheckins, listOkrsForUser, updateOkr } from '../data/okrs-repo.js';
-import { createOkrDraftProvider } from '../services/ai/okr-draft-provider.js';
+import { createOkrDraftProvider, type OkrConversationMessage } from '../services/ai/okr-draft-provider.js';
 import { applyPreviewSelection, buildPreview, parseWorkbook } from '../services/excel/kr-import.js';
 
 export const okrsRouter = Router();
@@ -14,6 +14,30 @@ const upload = multer({
 
 function requesterUserId(req: any): string {
   return req.auth?.user?.id ?? 'single-user';
+}
+
+function parseConversationPayload(body: any): { input?: { messages: OkrConversationMessage[]; draft?: any; focusArea?: string; timeframe?: string }; error?: string } {
+  const rawMessages = Array.isArray(body?.messages) ? body.messages : [];
+  const messages = rawMessages
+    .filter((message: any) => message && typeof message.content === 'string' && typeof message.role === 'string')
+    .map((message: any) => ({
+      role: message.role === 'assistant' ? 'assistant' : 'user',
+      content: String(message.content).trim()
+    }))
+    .filter((message: OkrConversationMessage) => Boolean(message.content));
+
+  if (!messages.length) {
+    return { error: 'messages_required' };
+  }
+
+  return {
+    input: {
+      messages,
+      draft: body?.draft,
+      focusArea: typeof body?.focusArea === 'string' ? body.focusArea : undefined,
+      timeframe: typeof body?.timeframe === 'string' ? body.timeframe : undefined
+    }
+  };
 }
 
 function parseOkrPayload(body: any) {
@@ -53,6 +77,18 @@ okrsRouter.post('/api/okrs/draft', async (req, res) => {
     return res.status(200).json({ ok: true, draft: result.draft, metadata: result.metadata });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'draft_generation_failed' });
+  }
+});
+
+okrsRouter.post('/api/okrs/chat', async (req, res) => {
+  const parsed = parseConversationPayload(req.body);
+  if (!parsed.input) return res.status(400).json({ ok: false, error: parsed.error ?? 'invalid_chat_payload' });
+
+  try {
+    const result = await draftProvider.continueConversation(parsed.input);
+    return res.status(200).json({ ok: true, assistantMessage: result.assistantMessage, draft: result.draft, metadata: result.metadata });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'chat_refinement_failed' });
   }
 });
 

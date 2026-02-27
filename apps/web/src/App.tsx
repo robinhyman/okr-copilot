@@ -29,6 +29,7 @@ type KrCheckin = {
 };
 
 type Feedback = { type: 'info' | 'success' | 'error'; text: string };
+type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
@@ -67,6 +68,9 @@ export function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [submittingKrId, setSubmittingKrId] = useState<number | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatting, setIsChatting] = useState(false);
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -164,11 +168,50 @@ export function App() {
       });
       setDraft(response.draft);
       setDraftMetadata(response.metadata ?? null);
-      setFeedback({ type: 'success', text: 'Draft generated. Review and save.' });
+      setChatMessages([
+        {
+          role: 'assistant',
+          content: 'Draft ready. Tell me what to refine (e.g. “make KR2 more measurable” or “reduce ambition by 20%”).'
+        }
+      ]);
+      setFeedback({ type: 'success', text: 'Draft generated. Review and refine in chat, then save.' });
     } catch (e: any) {
       setFeedback({ type: 'error', text: `Draft generation failed: ${String(e?.message || e)}` });
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  async function sendChatTurn() {
+    const trimmed = chatInput.trim();
+    if (!trimmed || isChatting) return;
+
+    const nextMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: trimmed }];
+    setChatMessages(nextMessages);
+    setChatInput('');
+    setIsChatting(true);
+    setFeedback({ type: 'info', text: 'Refining draft...' });
+
+    try {
+      const response = await jsonFetch('/api/okrs/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: nextMessages,
+          draft: active ?? undefined,
+          focusArea,
+          timeframe
+        })
+      });
+
+      setDraft(response.draft);
+      setDraftMetadata(response.metadata ?? null);
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: response.assistantMessage || 'Draft updated.' }]);
+      setFeedback({ type: 'success', text: 'Draft refined.' });
+    } catch (e: any) {
+      setFeedback({ type: 'error', text: `Refinement failed: ${String(e?.message || e)}` });
+    } finally {
+      setIsChatting(false);
     }
   }
 
@@ -322,6 +365,36 @@ export function App() {
                 <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} placeholder="Timeframe" />
                 <button disabled={isGenerating} onClick={() => generateDraft()}>
                   {isGenerating ? 'Generating...' : 'Generate draft'}
+                </button>
+              </div>
+            </div>
+
+            <div className="panel nested">
+              <h3>Draft refinement chat</h3>
+              <div className="chat-thread">
+                {!chatMessages.length && (
+                  <p className="muted">Start by generating a draft, then refine it here in conversation.</p>
+                )}
+                {chatMessages.map((message, index) => (
+                  <div key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
+                    <strong>{message.role === 'user' ? 'You' : 'Co-pilot'}:</strong> {message.content}
+                  </div>
+                ))}
+              </div>
+              <div className="row">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Ask for a refinement…"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void sendChatTurn();
+                    }
+                  }}
+                />
+                <button disabled={isChatting || !chatInput.trim() || !active} onClick={() => sendChatTurn()}>
+                  {isChatting ? 'Refining...' : 'Send'}
                 </button>
               </div>
             </div>

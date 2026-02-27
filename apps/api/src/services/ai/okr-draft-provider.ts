@@ -24,14 +24,34 @@ export interface OkrDraftResult {
   metadata: OkrDraftMetadata;
 }
 
+export interface OkrConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface OkrConversationRequest {
+  messages: OkrConversationMessage[];
+  draft?: OkrDraft;
+  focusArea?: string;
+  timeframe?: string;
+}
+
+export interface OkrConversationResult {
+  assistantMessage: string;
+  draft: OkrDraft;
+  metadata: OkrDraftMetadata;
+}
+
 export interface OkrDraftProvider {
   generateDraft(input: OkrDraftRequest): Promise<OkrDraftResult>;
+  continueConversation(input: OkrConversationRequest): Promise<OkrConversationResult>;
 }
 
 const DEFAULT_TIMEFRAME = 'Q2 2026';
 const DEFAULT_FOCUS = 'Operational excellence';
 const DEFAULT_UNIT = 'points';
 const MAX_KEY_RESULTS = 5;
+const MAX_MESSAGES = 12;
 
 function toNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -97,6 +117,20 @@ function normalizeDraftShape(raw: unknown, fallbackTimeframe: string): OkrDraft 
   };
 }
 
+function sanitizeMessages(messages: OkrConversationMessage[]): OkrConversationMessage[] {
+  return messages
+    .filter((message) => message && typeof message.content === 'string' && typeof message.role === 'string')
+    .map((message) => {
+      const role: OkrConversationMessage['role'] = message.role === 'assistant' ? 'assistant' : 'user';
+      return {
+        role,
+        content: message.content.trim().slice(0, getDraftInputMaxChars())
+      };
+    })
+    .filter((message) => Boolean(message.content))
+    .slice(-MAX_MESSAGES);
+}
+
 class DeterministicDraftProvider {
   generate(input: OkrDraftRequest): OkrDraft {
     const focus = capText(input.focusArea, DEFAULT_FOCUS);
@@ -120,6 +154,52 @@ class DeterministicDraftProvider {
       timeframe
     );
   }
+
+  continueConversation(input: OkrConversationRequest): OkrConversationResult {
+    const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
+    const baseDraft = input.draft ? normalizeDraftShape(input.draft, timeframe) : this.generate(input);
+    const lastUserMessage = [...sanitizeMessages(input.messages)].reverse().find((message) => message.role === 'user');
+    const instruction = (lastUserMessage?.content || '').toLowerCase();
+
+    const revisedDraft: OkrDraft = {
+      ...baseDraft,
+      keyResults: baseDraft.keyResults.map((kr) => ({ ...kr }))
+    };
+
+    if (instruction.includes('measurable')) {
+      revisedDraft.keyResults = revisedDraft.keyResults.map((kr) => ({
+        ...kr,
+        title: kr.title.includes('(measured weekly)') ? kr.title : `${kr.title} (measured weekly)`
+      }));
+    }
+
+    if (instruction.includes('less ambitious') || instruction.includes('reduce ambition')) {
+      revisedDraft.keyResults = revisedDraft.keyResults.map((kr) => ({
+        ...kr,
+        targetValue: Math.max(1, Math.round(kr.targetValue * 0.8))
+      }));
+    }
+
+    if (instruction.includes('objective') && (instruction.includes('rewrite') || instruction.includes('outcome'))) {
+      revisedDraft.objective = revisedDraft.objective.startsWith('Achieve ')
+        ? revisedDraft.objective
+        : `Achieve ${revisedDraft.objective.charAt(0).toLowerCase()}${revisedDraft.objective.slice(1)}`;
+    }
+
+    return {
+      assistantMessage:
+        lastUserMessage?.content
+          ? `Updated. I applied your latest instruction: "${lastUserMessage.content}". If you want, I can now tighten any KR with stronger numbers and clearer success criteria.`
+          : 'I can help refine this draft. Tell me what to change (e.g. “make KR2 more measurable” or “reduce ambition by 20%”).',
+      draft: normalizeDraftShape(revisedDraft, timeframe),
+      metadata: {
+        source: 'fallback',
+        provider: 'deterministic',
+        reason: 'llm_unavailable',
+        durationMs: 0
+      }
+    };
+  }
 }
 
 function extractJsonObject(text: string): unknown {
@@ -137,13 +217,10 @@ function extractJsonObject(text: string): unknown {
 }
 
 class OpenAiDraftProvider {
-  async generate(input: OkrDraftRequest): Promise<OkrDraft> {
+  private async complete(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>): Promise<string> {
     if (!process.env.OPENAI_API_KEY?.trim()) {
       throw new Error('missing_openai_api_key');
     }
-
-    const focus = capText(input.focusArea, DEFAULT_FOCUS);
-    const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), getLlmTimeoutMs());
@@ -160,17 +237,7 @@ class OpenAiDraftProvider {
           model: getOpenAiModel(),
           temperature: 0.2,
           response_format: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You draft OKRs. Return JSON only with keys: objective (string), timeframe (string), keyResults (array of 3 objects: title, targetValue, currentValue, unit).'
-            },
-            {
-              role: 'user',
-              content: `Focus area: ${focus}\nTimeframe: ${timeframe}`
-            }
-          ]
+          messages
         })
       });
 
@@ -183,11 +250,64 @@ class OpenAiDraftProvider {
       };
       const content = payload.choices?.[0]?.message?.content;
       if (!content) throw new Error('openai_empty_response');
-
-      return normalizeDraftShape(extractJsonObject(content), timeframe);
+      return content;
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  async generate(input: OkrDraftRequest): Promise<OkrDraft> {
+    const focus = capText(input.focusArea, DEFAULT_FOCUS);
+    const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
+
+    const content = await this.complete([
+      {
+        role: 'system',
+        content:
+          'You draft OKRs. Return JSON only with keys: objective (string), timeframe (string), keyResults (array of 3 objects: title, targetValue, currentValue, unit).'
+      },
+      {
+        role: 'user',
+        content: `Focus area: ${focus}\nTimeframe: ${timeframe}`
+      }
+    ]);
+
+    return normalizeDraftShape(extractJsonObject(content), timeframe);
+  }
+
+  async continueConversation(input: OkrConversationRequest): Promise<OkrConversationResult> {
+    const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
+    const safeMessages = sanitizeMessages(input.messages);
+    const baseDraft = input.draft ? normalizeDraftShape(input.draft, timeframe) : await this.generate(input);
+
+    const content = await this.complete([
+      {
+        role: 'system',
+        content:
+          'You are an OKR copilot. Continue the user conversation and refine the draft. Return JSON only with keys: assistantMessage (string) and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep draft realistic and measurable.'
+      },
+      {
+        role: 'user',
+        content: `Current draft JSON:\n${JSON.stringify(baseDraft)}`
+      },
+      ...safeMessages.map((message) => ({ role: message.role, content: message.content }))
+    ]);
+
+    const payload = extractJsonObject(content) as { assistantMessage?: unknown; draft?: unknown };
+
+    return {
+      assistantMessage:
+        typeof payload.assistantMessage === 'string' && payload.assistantMessage.trim()
+          ? payload.assistantMessage.trim().slice(0, 1000)
+          : 'I revised the draft. Tell me the next refinement you want.',
+      draft: normalizeDraftShape(payload.draft ?? baseDraft, timeframe),
+      metadata: {
+        source: 'llm',
+        provider: 'openai',
+        model: getOpenAiModel(),
+        durationMs: 0
+      }
+    };
   }
 }
 
@@ -213,6 +333,32 @@ class ResilientDraftProvider implements OkrDraftProvider {
       const fallbackDraft = this.fallbackProvider.generate(input);
       return {
         draft: fallbackDraft,
+        metadata: {
+          source: 'fallback',
+          provider: 'deterministic',
+          reason: error?.name === 'AbortError' ? 'llm_timeout' : (error?.message ?? 'llm_failed'),
+          durationMs: Date.now() - startedAt
+        }
+      };
+    }
+  }
+
+  async continueConversation(input: OkrConversationRequest): Promise<OkrConversationResult> {
+    const startedAt = Date.now();
+
+    try {
+      const result = await this.llmProvider.continueConversation(input);
+      return {
+        ...result,
+        metadata: {
+          ...result.metadata,
+          durationMs: Date.now() - startedAt
+        }
+      };
+    } catch (error: any) {
+      const fallback = this.fallbackProvider.continueConversation(input);
+      return {
+        ...fallback,
         metadata: {
           source: 'fallback',
           provider: 'deterministic',
