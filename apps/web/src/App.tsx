@@ -472,12 +472,13 @@ export function App() {
                 ))}
               </div>
               <div className="row">
-                <input
+                <textarea
+                  className="chat-input"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Ask for a refinement…"
+                  placeholder="Ask for a refinement… (Ctrl/Cmd+Enter to send)"
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                       e.preventDefault();
                       void sendChatTurn();
                     }
