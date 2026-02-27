@@ -77,6 +77,7 @@ export function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
+  const [chatScopeOkrId, setChatScopeOkrId] = useState<number | null>(null);
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -127,11 +128,23 @@ export function App() {
     const okrId = okrs[0]?.id;
     if (!Number.isFinite(okrId)) return;
 
+    const shouldAttemptRestore = chatMessages.length === 0 || chatScopeOkrId !== okrId;
+    if (!shouldAttemptRestore) return;
+
     try {
       const raw = window.localStorage.getItem(chatStorageKey);
-      if (!raw) return;
+      if (!raw) {
+        if (chatScopeOkrId !== okrId) setChatMessages([]);
+        setChatScopeOkrId(okrId);
+        return;
+      }
+
       const parsed = JSON.parse(raw) as PersistedChatState;
-      if (!parsed || parsed.okrId !== okrId || !Array.isArray(parsed.messages)) return;
+      if (!parsed || parsed.okrId !== okrId || !Array.isArray(parsed.messages)) {
+        if (chatScopeOkrId !== okrId) setChatMessages([]);
+        setChatScopeOkrId(okrId);
+        return;
+      }
 
       const restored: ChatMessage[] = parsed.messages
         .filter((message: any) => message && typeof message.content === 'string' && typeof message.role === 'string')
@@ -142,10 +155,11 @@ export function App() {
         .slice(-20);
 
       setChatMessages(restored);
+      setChatScopeOkrId(okrId);
     } catch {
       // ignore local restore issues
     }
-  }, [draft, okrs]);
+  }, [draft, okrs, chatMessages.length, chatScopeOkrId]);
 
   useEffect(() => {
     // Scope persistence to a specific saved OKR id to avoid replaying stale chat on a different draft/context.
@@ -217,6 +231,7 @@ export function App() {
       });
       setDraft(response.draft);
       setDraftMetadata(response.metadata ?? null);
+      setChatScopeOkrId(null);
       setChatMessages([
         {
           role: 'assistant',
@@ -293,9 +308,16 @@ export function App() {
         body: JSON.stringify(payload)
       });
 
+      if (Number.isFinite(existingId)) {
+        setChatScopeOkrId(existingId as number);
+      }
       setDraft(null);
       setDraftMetadata(null);
       const rows = await refreshOkrs();
+      const persistedOkrId = rows[0]?.id;
+      if (Number.isFinite(persistedOkrId)) {
+        setChatScopeOkrId(persistedOkrId);
+      }
       await refreshCheckinHistory(rows);
       setFeedback({ type: 'success', text: isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.' });
     } catch (e: any) {
