@@ -33,6 +33,7 @@ type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
+const chatStorageKey = 'okr-copilot.chat.v1';
 
 const NAV_ITEMS: Array<{ path: RoutePath; label: string }> = [
   { path: '/overview', label: 'Overview' },
@@ -114,6 +115,40 @@ export function App() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(chatStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+
+      const restored: ChatMessage[] = parsed
+        .filter((message: any) => message && typeof message.content === 'string' && typeof message.role === 'string')
+        .map((message: any) => {
+          const role: ChatMessage['role'] = message.role === 'assistant' ? 'assistant' : 'user';
+          return {
+            role,
+            content: String(message.content)
+          };
+        })
+        .slice(-20);
+
+      if (restored.length) {
+        setChatMessages(restored);
+      }
+    } catch {
+      // ignore local restore issues
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(chatStorageKey, JSON.stringify(chatMessages.slice(-20)));
+    } catch {
+      // ignore local persistence issues
+    }
+  }, [chatMessages]);
 
   async function refreshOkrs(): Promise<ApiOkr[]> {
     const response = await jsonFetch('/api/okrs');

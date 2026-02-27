@@ -163,6 +163,42 @@ test('draft falls back when LLM provider call fails', async () => {
   }
 });
 
+test('chat endpoint refines a draft and returns assistant message', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const draftRes = await request(app).post('/api/okrs/draft').send({
+      focusArea: 'Client delivery',
+      timeframe: 'Q2 2026'
+    });
+
+    assert.equal(draftRes.status, 200);
+
+    const chatRes = await request(app)
+      .post('/api/okrs/chat')
+      .send({
+        draft: draftRes.body?.draft,
+        messages: [{ role: 'user', content: 'make all key results measurable and reduce ambition by 20%' }]
+      });
+
+    assert.equal(chatRes.status, 200);
+    assert.equal(chatRes.body?.ok, true);
+    assert.equal(typeof chatRes.body?.assistantMessage, 'string');
+    assert.ok(chatRes.body?.assistantMessage?.length > 0);
+    assert.ok(Array.isArray(chatRes.body?.draft?.keyResults));
+    assert.ok(chatRes.body?.draft?.keyResults?.length > 0);
+    assert.ok(['llm', 'fallback'].includes(chatRes.body?.metadata?.source));
+  } finally {
+    if (priorKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = priorKey;
+    }
+  }
+});
+
 test('read endpoints require auth and update missing OKR returns 404', async () => {
   const app = createApp();
 
