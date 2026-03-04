@@ -76,6 +76,25 @@ export function OverviewSummary({ metrics }: OverviewSummaryProps) {
           )}
         </div>
       </div>
+
+      <div className="objective-summary-grid" data-testid="grouped-objective-summary">
+        {metrics.byObjective.map((objective) => (
+          <article className="objective-summary-card" key={objective.id || objective.objective}>
+            <h4>{objective.objective}</h4>
+            <p className="muted">{objective.timeframe || 'No timeframe'}</p>
+            <p>
+              <strong>{objective.progressPercent}%</strong> objective progress
+            </p>
+            <ul className="history">
+              {objective.keyResults.map((kr) => (
+                <li key={kr.id}>
+                  {kr.title} — {kr.progressPercent}% ({kr.currentValue}/{kr.targetValue} {kr.unit})
+                </li>
+              ))}
+            </ul>
+          </article>
+        ))}
+      </div>
     </section>
   );
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { OverviewSummary } from './OverviewSummary';
-import { buildOverviewMetrics } from '../lib/overviewMetrics';
+import { buildGroupedOverviewMetrics, buildOverviewMetrics } from '../lib/overviewMetrics';
 
 test('OverviewSummary renders empty state when no KRs', () => {
   const html = renderToStaticMarkup(createElement(OverviewSummary, { metrics: buildOverviewMetrics([]) }));
@@ -22,4 +22,20 @@ test('OverviewSummary renders status blocks and at-risk items', () => {
   assert.match(html, /KR status distribution/);
   assert.match(html, /Top at-risk KRs/);
   assert.match(html, /Risky KR/);
+});
+
+
+test('OverviewSummary renders grouped objective sections', () => {
+  const metrics = buildGroupedOverviewMetrics([
+    {
+      id: 1,
+      objective: 'Grow pipeline',
+      timeframe: 'Q2',
+      keyResults: [{ id: 11, title: 'Book intros', currentValue: 3, targetValue: 10, unit: 'calls' }]
+    }
+  ]);
+
+  const html = renderToStaticMarkup(createElement(OverviewSummary, { metrics }));
+  assert.match(html, /Grow pipeline/);
+  assert.match(html, /Book intros/);
 });

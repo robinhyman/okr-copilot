@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildOverviewMetrics, classifyKrStatus } from './overviewMetrics';
+import { buildGroupedOverviewMetrics, buildOverviewMetrics, classifyKrStatus } from './overviewMetrics';
 
 test('classifyKrStatus applies deterministic thresholds', () => {
   assert.equal(classifyKrStatus(0.8), 'on-track');
@@ -27,6 +27,31 @@ test('buildOverviewMetrics computes aggregate progress and distribution', () => 
     metrics.topAtRisk.map((kr) => kr.id),
     [3, 2]
   );
+});
+
+test('buildGroupedOverviewMetrics groups KR metrics under objectives', () => {
+  const metrics = buildGroupedOverviewMetrics([
+    {
+      id: 11,
+      objective: 'Objective A',
+      timeframe: 'Q2',
+      keyResults: [
+        { id: 1, title: 'A1', currentValue: 50, targetValue: 100, unit: '%' },
+        { id: 2, title: 'A2', currentValue: 100, targetValue: 100, unit: '%' }
+      ]
+    },
+    {
+      id: 22,
+      objective: 'Objective B',
+      timeframe: 'Q2',
+      keyResults: [{ id: 3, title: 'B1', currentValue: 20, targetValue: 100, unit: '%' }]
+    }
+  ]);
+
+  assert.equal(metrics.byObjective.length, 2);
+  assert.equal(metrics.byObjective[0].progressPercent, 75);
+  assert.equal(metrics.byObjective[1].progressPercent, 20);
+  assert.equal(metrics.totalKrs, 3);
 });
 
 test('buildOverviewMetrics handles empty and invalid targets', () => {

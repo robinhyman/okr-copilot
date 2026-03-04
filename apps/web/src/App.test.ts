@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getRoutePath, validateDraft } from './lib/ui';
+import { getRoutePath, validateDraft, validateObjectiveSet } from './lib/ui';
 
 test('getRoutePath maps supported routes', () => {
   assert.equal(getRoutePath('/overview'), '/overview');
@@ -30,4 +30,26 @@ test('validateDraft passes valid draft', () => {
   });
 
   assert.deepEqual(errors, []);
+});
+
+test('validateObjectiveSet enforces 5x5 constraints', () => {
+  const tooManyObjectives = validateObjectiveSet({
+    objectives: Array.from({ length: 6 }, (_, i) => ({
+      objective: `Objective ${i + 1}`,
+      timeframe: 'Q2',
+      keyResults: [{ title: 'KR', currentValue: 0, targetValue: 1, unit: 'pts' }]
+    }))
+  });
+  assert.ok(tooManyObjectives.some((e) => e.includes('No more than 5 objectives')));
+
+  const tooManyKrs = validateObjectiveSet({
+    objectives: [
+      {
+        objective: 'Objective 1',
+        timeframe: 'Q2',
+        keyResults: Array.from({ length: 6 }, (_, i) => ({ title: `KR ${i + 1}`, currentValue: 0, targetValue: 1, unit: 'pts' }))
+      }
+    ]
+  });
+  assert.ok(tooManyKrs.some((e) => e.includes('no more than 5 key results')));
 });
