@@ -1,4 +1,4 @@
-import type { OverviewMetrics } from '../lib/overviewMetrics';
+import type { KrStatus, OverviewMetrics } from '../lib/overviewMetrics';
 
 type OverviewSummaryProps = {
   metrics: OverviewMetrics;
@@ -10,13 +10,25 @@ const STATUS_META: Array<{ key: keyof OverviewMetrics['statusDistribution']; lab
   { key: 'off-track', label: 'Off track' }
 ];
 
-function ProgressBar({ value, label, testId }: { value: number; label: string; testId?: string }) {
+function ProgressBar({
+  value,
+  label,
+  testId,
+  tone = 'objective',
+  thickness = 'standard'
+}: {
+  value: number;
+  label: string;
+  testId?: string;
+  tone?: 'objective' | KrStatus;
+  thickness?: 'standard' | 'objective';
+}) {
   const bounded = Math.max(0, Math.min(100, value));
 
   return (
     <div className="progress-bar-wrap" data-testid={testId} role="img" aria-label={`${label} ${bounded}%`}>
-      <div className="progress-bar-track">
-        <div className="progress-bar-fill" style={{ width: `${bounded}%` }} />
+      <div className={`progress-bar-track ${thickness === 'objective' ? 'objective' : ''}`}>
+        <div className={`progress-bar-fill ${tone}`} style={{ width: `${bounded}%` }} />
       </div>
       <strong>{bounded}%</strong>
     </div>
@@ -81,7 +93,12 @@ export function OverviewSummary({ metrics }: OverviewSummaryProps) {
               {metrics.topAtRisk.map((kr) => (
                 <li key={kr.id}>
                   <strong>{kr.title}</strong>
-                  <ProgressBar value={kr.progressPercent} label={`${kr.title} progress`} testId={`at-risk-kr-progress-${kr.id}`} />
+                  <ProgressBar
+                    value={kr.progressPercent}
+                    label={`${kr.title} progress`}
+                    testId={`at-risk-kr-progress-${kr.id}`}
+                    tone={kr.status}
+                  />
                   <span className="muted">
                     {kr.currentValue}/{kr.targetValue} {kr.unit}
                   </span>
@@ -94,33 +111,61 @@ export function OverviewSummary({ metrics }: OverviewSummaryProps) {
         </div>
       </div>
 
+      <div className="overview-objectives-heading-row">
+        <h3 className="overview-objectives-heading">Objectives</h3>
+        <p className="muted">Each objective shows its overall progress and KR contributors.</p>
+      </div>
+
       <div className="objective-summary-grid" data-testid="grouped-objective-summary">
-        {metrics.byObjective.map((objective) => (
-          <article className="objective-summary-card" key={objective.id || objective.objective} data-testid={`objective-card-${objective.id}`}>
-            <h4>{objective.objective}</h4>
-            <p className="muted">{objective.timeframe || 'No timeframe'}</p>
-            <ProgressBar
-              value={objective.progressPercent}
-              label={`${objective.objective} objective progress`}
-              testId={`objective-progress-${objective.id}`}
-            />
-            <ul className="history kr-visual-list">
-              {objective.keyResults.map((kr) => (
-                <li key={kr.id} data-testid={`objective-${objective.id}-kr-${kr.id}`}>
-                  <span>{kr.title}</span>
-                  <ProgressBar
-                    value={kr.progressPercent}
-                    label={`${kr.title} progress`}
-                    testId={`kr-progress-${objective.id}-${kr.id}`}
-                  />
-                  <span className="muted">
-                    {kr.currentValue}/{kr.targetValue} {kr.unit}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </article>
-        ))}
+        {metrics.byObjective.map((objective) => {
+          const atRiskCount = objective.keyResults.filter((kr) => kr.status !== 'on-track').length;
+
+          return (
+            <article className="objective-summary-card" key={objective.id || objective.objective} data-testid={`objective-card-${objective.id}`}>
+              <header className="objective-summary-header">
+                <h4>{objective.objective}</h4>
+                <p className="muted">{objective.timeframe || 'No timeframe'}</p>
+              </header>
+
+              <div className="objective-meta-row muted">
+                <span>{objective.timeframe || 'No timeframe set'}</span>
+                <span>{objective.keyResults.length} KRs</span>
+                <span>{atRiskCount} at risk</span>
+              </div>
+
+              <div className="objective-progress-block">
+                <p className="objective-progress-label">Objective progress</p>
+                <ProgressBar
+                  value={objective.progressPercent}
+                  label={`${objective.objective} objective progress`}
+                  testId={`objective-progress-${objective.id}`}
+                  tone="objective"
+                  thickness="objective"
+                />
+              </div>
+
+              <div className="kr-contribution-block" data-testid={`objective-${objective.id}-kr-contributors`}>
+                <p className="kr-contribution-title">Key result contributors</p>
+                <ul className="kr-visual-list">
+                  {objective.keyResults.map((kr) => (
+                    <li key={kr.id} data-testid={`objective-${objective.id}-kr-${kr.id}`}>
+                      <span className="kr-title" title={kr.title}>{kr.title}</span>
+                      <ProgressBar
+                        value={kr.progressPercent}
+                        label={`${kr.title} progress`}
+                        testId={`kr-progress-${objective.id}-${kr.id}`}
+                        tone={kr.status}
+                      />
+                      <span className="muted">
+                        {kr.currentValue}/{kr.targetValue} {kr.unit}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
