@@ -60,7 +60,11 @@ type ChatResponse = {
   metadata?: DraftMetadata;
 };
 
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
+const apiBase =
+  import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname)
+    ? `${window.location.protocol}//${window.location.hostname}:4000`
+    : 'http://localhost:4000');
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
 const chatStorageKey = 'okr-copilot.chat.v1';
 
@@ -504,27 +508,9 @@ export function App() {
             </div>
 
             {!!okrs.length ? (
-              <div className="panel nested">
-                <h3>Objectives</h3>
-                {okrs.map((okr) => (
-                  <div key={okr.id} className="objective-block">
-                    <p>
-                      <strong>{okr.objective}</strong> ({okr.timeframe})
-                    </p>
-                    <ul className="history">
-                      {okr.keyResults.map((kr) => (
-                        <li key={kr.id}>
-                          {kr.title} — {kr.current_value}/{kr.target_value} {kr.unit}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-                <p className="muted">
-                  Last check-in:{' '}
-                  {overviewStats.lastCheckinAt ? new Date(overviewStats.lastCheckinAt).toLocaleString() : 'No check-ins yet'}
-                </p>
-              </div>
+              <p className="muted" data-testid="overview-last-checkin">
+                Last check-in: {overviewStats.lastCheckinAt ? new Date(overviewStats.lastCheckinAt).toLocaleString() : 'No check-ins yet'}
+              </p>
             ) : (
               <p>No OKR yet. Head to OKRs to generate your first draft.</p>
             )}

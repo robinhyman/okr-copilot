@@ -10,6 +10,19 @@ const STATUS_META: Array<{ key: keyof OverviewMetrics['statusDistribution']; lab
   { key: 'off-track', label: 'Off track' }
 ];
 
+function ProgressBar({ value, label, testId }: { value: number; label: string; testId?: string }) {
+  const bounded = Math.max(0, Math.min(100, value));
+
+  return (
+    <div className="progress-bar-wrap" data-testid={testId} role="img" aria-label={`${label} ${bounded}%`}>
+      <div className="progress-bar-track">
+        <div className="progress-bar-fill" style={{ width: `${bounded}%` }} />
+      </div>
+      <strong>{bounded}%</strong>
+    </div>
+  );
+}
+
 export function OverviewSummary({ metrics }: OverviewSummaryProps) {
   if (!metrics.totalKrs) {
     return (
@@ -67,7 +80,11 @@ export function OverviewSummary({ metrics }: OverviewSummaryProps) {
             <ul className="history">
               {metrics.topAtRisk.map((kr) => (
                 <li key={kr.id}>
-                  <strong>{kr.title}</strong> — {kr.progressPercent}% ({kr.currentValue}/{kr.targetValue} {kr.unit})
+                  <strong>{kr.title}</strong>
+                  <ProgressBar value={kr.progressPercent} label={`${kr.title} progress`} testId={`at-risk-kr-progress-${kr.id}`} />
+                  <span className="muted">
+                    {kr.currentValue}/{kr.targetValue} {kr.unit}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -79,16 +96,26 @@ export function OverviewSummary({ metrics }: OverviewSummaryProps) {
 
       <div className="objective-summary-grid" data-testid="grouped-objective-summary">
         {metrics.byObjective.map((objective) => (
-          <article className="objective-summary-card" key={objective.id || objective.objective}>
+          <article className="objective-summary-card" key={objective.id || objective.objective} data-testid={`objective-card-${objective.id}`}>
             <h4>{objective.objective}</h4>
             <p className="muted">{objective.timeframe || 'No timeframe'}</p>
-            <p>
-              <strong>{objective.progressPercent}%</strong> objective progress
-            </p>
-            <ul className="history">
+            <ProgressBar
+              value={objective.progressPercent}
+              label={`${objective.objective} objective progress`}
+              testId={`objective-progress-${objective.id}`}
+            />
+            <ul className="history kr-visual-list">
               {objective.keyResults.map((kr) => (
-                <li key={kr.id}>
-                  {kr.title} — {kr.progressPercent}% ({kr.currentValue}/{kr.targetValue} {kr.unit})
+                <li key={kr.id} data-testid={`objective-${objective.id}-kr-${kr.id}`}>
+                  <span>{kr.title}</span>
+                  <ProgressBar
+                    value={kr.progressPercent}
+                    label={`${kr.title} progress`}
+                    testId={`kr-progress-${objective.id}-${kr.id}`}
+                  />
+                  <span className="muted">
+                    {kr.currentValue}/{kr.targetValue} {kr.unit}
+                  </span>
                 </li>
               ))}
             </ul>

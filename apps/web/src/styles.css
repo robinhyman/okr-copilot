@@ -310,6 +310,60 @@ button.secondary {
   align-items: center;
 }
 
+.objective-summary-grid {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.objective-summary-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.objective-summary-card h4 {
+  margin: 0 0 0.25rem;
+}
+
+.kr-visual-list {
+  list-style: none;
+  margin-top: 0.55rem;
+  padding: 0;
+}
+
+.kr-visual-list li {
+  padding: 0.45rem 0;
+  border-top: 1px solid #f3f4f6;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.kr-visual-list li:first-child {
+  border-top: 0;
+}
+
+.progress-bar-wrap {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #0ea5e9);
+  border-radius: inherit;
+}
+
 .status-pill {
   border-radius: 999px;
   padding: 0.2rem 0.55rem;
@@ -350,6 +404,10 @@ button.secondary {
   }
 
   .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .objective-summary-grid {
     grid-template-columns: 1fr;
   }
 }
