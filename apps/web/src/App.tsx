@@ -256,7 +256,7 @@ export function App() {
         const rows = await refreshOkrs();
         await refreshCheckinHistory(rows);
       } catch (e: any) {
-        setScopedFeedback('error', String(e?.message || e), '/overview');
+        setScopedFeedback('error', String(e?.message || e), getRoutePath(window.location.pathname));
       }
     })();
   }, []);
