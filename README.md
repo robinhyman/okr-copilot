@@ -116,7 +116,7 @@ npm run dev
 - OKRs: http://localhost:4000/api/okrs
 
 ## Web route usage (Sprint 1 UI)
-- `http://localhost:5173/overview` — status snapshot and entry points
+- `http://localhost:5173/overview` — status snapshot, graphical KR progress summary, and entry points
 - `http://localhost:5173/okrs` — generate draft, edit objective/KRs, save
 - `http://localhost:5173/checkins` — submit KR values/commentary and view recent history
 
@@ -210,7 +210,7 @@ Expected: passing integration tests covering:
 
 ## Current behavior
 - Web app now uses a route shell with three pages:
-  - `/overview` for snapshot stats and quick actions
+  - `/overview` for snapshot stats, graphical progress summary (overall donut, status distribution, top at-risk KRs), and quick actions
   - `/okrs` for draft generation + edit/save
   - `/checkins` for KR check-ins + recent history
 - UI status messages are now route-scoped and auto-expire (prevents stale toasts leaking into other pages).

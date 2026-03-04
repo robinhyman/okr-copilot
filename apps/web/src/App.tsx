@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getRoutePath, validateDraft, type RoutePath } from './lib/ui';
+import { buildOverviewMetrics } from './lib/overviewMetrics';
+import { OverviewSummary } from './components/OverviewSummary';
 
 type Draft = {
   objective: string;
@@ -144,9 +146,15 @@ export function App() {
 
   const overviewStats = useMemo(() => {
     const keyResults = okrs[0]?.keyResults ?? [];
-    const total = keyResults.length;
-    const onTrack = keyResults.filter((kr) => Number(kr.current_value) >= Number(kr.target_value)).length;
-    const atRisk = Math.max(total - onTrack, 0);
+    const progress = buildOverviewMetrics(
+      keyResults.map((kr) => ({
+        id: kr.id,
+        title: kr.title,
+        currentValue: Number(kr.current_value),
+        targetValue: Number(kr.target_value),
+        unit: kr.unit
+      }))
+    );
 
     const recent = Object.values(checkinHistory)
       .flat()
@@ -154,9 +162,10 @@ export function App() {
 
     return {
       objectiveCount: okrs.length,
-      onTrack,
-      atRisk,
-      lastCheckinAt: recent?.created_at ?? null
+      onTrack: progress.statusDistribution['on-track'],
+      atRisk: progress.statusDistribution['needs-attention'] + progress.statusDistribution['off-track'],
+      lastCheckinAt: recent?.created_at ?? null,
+      progress
     };
   }, [okrs, checkinHistory]);
 
@@ -460,6 +469,8 @@ export function App() {
         {route === '/overview' && (
           <section className="panel">
             <h2>Overview</h2>
+            <OverviewSummary metrics={overviewStats.progress} />
+
             <div className="stats-row">
               <div className="stat-card">
                 <p>Active objectives</p>
