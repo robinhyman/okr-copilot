@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getRoutePath, validateDraft, type RoutePath } from './lib/ui';
 
 type Draft = {
@@ -28,7 +28,7 @@ type KrCheckin = {
   created_at: string;
 };
 
-type Feedback = { type: 'info' | 'success' | 'error'; text: string };
+type Feedback = { type: 'info' | 'success' | 'error'; text: string; scope: RoutePath; id: number };
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 type CoachingContext = {
@@ -86,12 +86,12 @@ export function App() {
   const [draftMetadata, setDraftMetadata] = useState<DraftMetadata | null>(null);
   const [focusArea, setFocusArea] = useState('Client delivery');
   const [timeframe, setTimeframe] = useState('Q2 2026');
-  const [feedback, setFeedback] = useState<Feedback>({ type: 'info', text: '' });
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [checkins, setCheckins] = useState<Record<number, { value: string; commentary: string }>>({});
   const [checkinHistory, setCheckinHistory] = useState<Record<number, KrCheckin[]>>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [submittingKrId, setSubmittingKrId] = useState<number | null>(null);
+  const [submittingKrIds, setSubmittingKrIds] = useState<Record<number, boolean>>({});
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
@@ -100,6 +100,26 @@ export function App() {
   const [isDraftReadyFromChat, setIsDraftReadyFromChat] = useState(false);
   const [coachingContext, setCoachingContext] = useState<CoachingContext>({});
   const [missingContext, setMissingContext] = useState<string[]>([]);
+  const feedbackTimerRef = useRef<number | null>(null);
+  const checkinInFlightRef = useRef<Set<number>>(new Set());
+
+  function clearFeedbackTimer() {
+    if (feedbackTimerRef.current != null) {
+      window.clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+  }
+
+  function setScopedFeedback(type: Feedback['type'], text: string, scope: RoutePath) {
+    const nextId = Date.now() + Math.random();
+    setFeedback({ type, text, scope, id: nextId });
+    clearFeedbackTimer();
+    const ttlMs = type === 'error' ? 6000 : 3500;
+    feedbackTimerRef.current = window.setTimeout(() => {
+      setFeedback((current) => (current?.id === nextId ? null : current));
+      feedbackTimerRef.current = null;
+    }, ttlMs);
+  }
 
   const active = useMemo(() => {
     if (draft) return draft;
@@ -144,6 +164,10 @@ export function App() {
     const onPopState = () => setRoute(getRoutePath(window.location.pathname));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    return () => clearFeedbackTimer();
   }, []);
 
   useEffect(() => {
@@ -232,7 +256,7 @@ export function App() {
         const rows = await refreshOkrs();
         await refreshCheckinHistory(rows);
       } catch (e: any) {
-        setFeedback({ type: 'error', text: String(e?.message || e) });
+        setScopedFeedback('error', String(e?.message || e), '/overview');
       }
     })();
   }, []);
@@ -261,7 +285,7 @@ export function App() {
             'Great — what would you like to craft an OKR for? Share context (outcome, constraints, current baseline, and timeframe), and I’ll coach you to a strong first draft.'
         }
       ]);
-      setFeedback({ type: 'info', text: 'Coaching started. Tell me what you want to achieve.' });
+      setScopedFeedback('info', 'Coaching started. Tell me what you want to achieve.', '/okrs');
     } finally {
       setIsGenerating(false);
     }
@@ -279,7 +303,7 @@ export function App() {
     setChatMessages(nextMessages);
     setChatInput('');
     setIsChatting(true);
-    setFeedback({ type: 'info', text: 'Refining draft...' });
+    setScopedFeedback('info', 'Refining draft...', '/okrs');
 
     try {
       const response = (await jsonFetch('/api/okrs/chat', {
@@ -312,12 +336,13 @@ export function App() {
 
       const assistantContent = [response.assistantMessage || 'Draft updated.', ...coachingBits].join('\n\n');
       setChatMessages((prev) => [...prev, { role: 'assistant', content: assistantContent }]);
-      setFeedback({
-        type: 'success',
-        text: response.mode === 'questions' ? 'Good context. A couple of questions before first draft.' : 'Draft ready/refined.'
-      });
+      setScopedFeedback(
+        'success',
+        response.mode === 'questions' ? 'Good context. A couple of questions before first draft.' : 'Draft ready/refined.',
+        '/okrs'
+      );
     } catch (e: any) {
-      setFeedback({ type: 'error', text: `Refinement failed: ${String(e?.message || e)}` });
+      setScopedFeedback('error', `Refinement failed: ${String(e?.message || e)}`, '/okrs');
     } finally {
       setIsChatting(false);
     }
@@ -331,12 +356,12 @@ export function App() {
   async function saveOkr() {
     if (!active) return;
     if (validationErrors.length) {
-      setFeedback({ type: 'error', text: 'Please fix validation errors before saving.' });
+      setScopedFeedback('error', 'Please fix validation errors before saving.', '/okrs');
       return;
     }
 
     setIsSaving(true);
-    setFeedback({ type: 'info', text: 'Saving...' });
+    setScopedFeedback('info', 'Saving...', '/okrs');
 
     const payload = {
       objective: active.objective,
@@ -371,9 +396,9 @@ export function App() {
       setIsDraftReadyFromChat(false);
       setMissingContext([]);
       await refreshCheckinHistory(rows);
-      setFeedback({ type: 'success', text: isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.' });
+      setScopedFeedback('success', isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.', '/okrs');
     } catch (e: any) {
-      setFeedback({ type: 'error', text: `Save failed: ${String(e?.message || e)}` });
+      setScopedFeedback('error', `Save failed: ${String(e?.message || e)}`, '/okrs');
     } finally {
       setIsSaving(false);
     }
@@ -381,10 +406,12 @@ export function App() {
 
   async function submitCheckin(krId: number) {
     const current = checkins[krId];
-    if (!current || !current.value) return;
+    if (!current || !current.value?.trim()) return;
+    if (checkinInFlightRef.current.has(krId)) return;
 
-    setSubmittingKrId(krId);
-    setFeedback({ type: 'info', text: 'Submitting check-in...' });
+    checkinInFlightRef.current.add(krId);
+    setSubmittingKrIds((prev) => ({ ...prev, [krId]: true }));
+    setScopedFeedback('info', `Submitting check-in for KR #${krId}...`, '/checkins');
     try {
       await jsonFetch(`/api/key-results/${krId}/checkins`, {
         method: 'POST',
@@ -398,11 +425,16 @@ export function App() {
       setCheckins((prev) => ({ ...prev, [krId]: { value: '', commentary: '' } }));
       const rows = await refreshOkrs();
       await refreshCheckinHistory(rows);
-      setFeedback({ type: 'success', text: 'Check-in saved.' });
+      setScopedFeedback('success', 'Check-in saved.', '/checkins');
     } catch (e: any) {
-      setFeedback({ type: 'error', text: `Check-in failed: ${String(e?.message || e)}` });
+      setScopedFeedback('error', `Check-in failed: ${String(e?.message || e)}`, '/checkins');
     } finally {
-      setSubmittingKrId(null);
+      checkinInFlightRef.current.delete(krId);
+      setSubmittingKrIds((prev) => {
+        const next = { ...prev };
+        delete next[krId];
+        return next;
+      });
     }
   }
 
@@ -414,6 +446,7 @@ export function App() {
           {NAV_ITEMS.map((item) => (
             <button
               key={item.path}
+              data-testid={`nav-${item.path.slice(1)}`}
               className={`nav-item ${route === item.path ? 'active' : ''}`}
               onClick={() => navigate(item.path)}
             >
@@ -628,7 +661,7 @@ export function App() {
             <h2>Check-ins</h2>
             {!!okrs.length ? (
               okrs[0].keyResults.map((kr) => (
-                <div key={kr.id} className="checkin">
+                <div key={kr.id} className="checkin" data-testid={`checkin-row-${kr.id}`}>
                   <div>
                     <strong>{kr.title}</strong> ({kr.current_value}/{kr.target_value} {kr.unit})
                   </div>
@@ -636,6 +669,7 @@ export function App() {
                     <input
                       type="number"
                       placeholder="New value"
+                      data-testid={`checkin-value-${kr.id}`}
                       value={checkins[kr.id]?.value ?? ''}
                       onChange={(e) =>
                         setCheckins((prev) => ({
@@ -646,6 +680,7 @@ export function App() {
                     />
                     <input
                       placeholder="Commentary"
+                      data-testid={`checkin-commentary-${kr.id}`}
                       value={checkins[kr.id]?.commentary ?? ''}
                       onChange={(e) =>
                         setCheckins((prev) => ({
@@ -654,11 +689,15 @@ export function App() {
                         }))
                       }
                     />
-                    <button disabled={submittingKrId === kr.id} onClick={() => submitCheckin(kr.id)}>
-                      {submittingKrId === kr.id ? 'Submitting...' : 'Submit check-in'}
+                    <button
+                      data-testid={`submit-checkin-${kr.id}`}
+                      disabled={Boolean(submittingKrIds[kr.id])}
+                      onClick={() => submitCheckin(kr.id)}
+                    >
+                      {submittingKrIds[kr.id] ? 'Submitting...' : 'Submit check-in'}
                     </button>
                   </div>
-                  <ul className="history">
+                  <ul className="history" data-testid={`checkin-history-${kr.id}`}>
                     {(checkinHistory[kr.id] ?? []).map((entry) => (
                       <li key={entry.id}>
                         <strong>{entry.value}</strong> — {entry.commentary || 'No commentary'}
@@ -675,7 +714,11 @@ export function App() {
           </section>
         )}
 
-        {!!feedback.text && <p className={`status ${feedback.type}`}>{feedback.text}</p>}
+        {!!feedback && feedback.scope === route && (
+          <p data-testid={`route-feedback-${route.slice(1)}`} className={`status ${feedback.type}`}>
+            {feedback.text}
+          </p>
+        )}
       </section>
     </main>
   );

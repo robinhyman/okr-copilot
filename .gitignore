@@ -1,9 +1,15 @@
 node_modules
 .env
 .env.*
+!.env.example
 dist
 coverage
 .DS_Store
+.local-run/
+artifacts/
+e2e/artifacts/
+qemu_chrome-headless-shell_*.core
+core
 
 # local installers
 *.deb
