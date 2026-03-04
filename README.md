@@ -132,6 +132,29 @@ npm test
 npm run e2e:checkins:local
 ```
 
+## PR release evidence checklist
+Run this before opening/updating a PR:
+
+```bash
+npm run release:checklist
+```
+
+Default evidence file: `docs/qa/pr-evidence.md`.
+
+Required fields:
+- `DEPLOY_OK: PASS|OK|TRUE|YES|✅`
+- `LINUX_TARGET_OK: PASS|OK|TRUE|YES|✅`
+- `E2E_ARTIFACTS: <artifact path or URL>`
+- `USER_SIM_VERDICT: PASS|FAIL|BLOCKED|NEEDS_FOLLOW_UP|✅|❌`
+
+Example:
+```md
+DEPLOY_OK: PASS
+LINUX_TARGET_OK: PASS
+E2E_ARTIFACTS: artifacts/e2e/report/index.html
+USER_SIM_VERDICT: PASS
+```
+
 ## OKR draft provider (LLM + deterministic fallback)
 - `POST /api/okrs/draft` now attempts OpenAI when `OPENAI_API_KEY` is present.
 - If key is missing, provider call fails, or timeout hits, API gracefully falls back to deterministic draft generation.
