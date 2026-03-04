@@ -38,6 +38,54 @@ projects/okr-copilot
 
 ## Local run
 
+### One-command browser demo (macOS local)
+
+From repo root:
+
+```bash
+npm run deploy:local
+```
+
+What this script does deterministically:
+- creates `.env` from `.env.example` if missing
+- starts Docker dependencies (`postgres`, `redis`)
+- runs `npm ci`
+- runs DB migrations
+- starts API and web dev servers
+- runs smoke checks against API + browser route
+- prints `DEPLOY_OK` on success
+
+Success markers and URLs:
+- `DEPLOY_OK`
+- Demo URL: `http://127.0.0.1:5173/overview`
+- API health: `http://127.0.0.1:4000/health`
+
+Logs:
+- `.local-run/api.log`
+- `.local-run/web.log`
+
+Stop behavior:
+- Press `Ctrl+C` in the deploy terminal to stop API/web processes.
+- Postgres/Redis remain running (stop with `docker compose down`).
+
+### Linux production parity gate
+
+Run:
+
+```bash
+npm run validate:linux-target
+```
+
+This validates Linux target readiness and prints:
+- `LINUX_TARGET_OK`
+
+It includes:
+- CI workflow check for `ubuntu-latest`
+- scan for macOS-only runtime references in project scripts/docs
+- Linux containerized checks (`npm ci && npm run typecheck && npm run build` in `node:22` linux/amd64)
+
+### Manual step-by-step (optional)
+
 ### 1) Configure env
 ```bash
 cp .env.example .env
@@ -81,6 +129,7 @@ Notes:
 npm run typecheck
 npm run build
 npm test
+npm run e2e:checkins:local
 ```
 
 ## OKR draft provider (LLM + deterministic fallback)
@@ -141,6 +190,8 @@ Expected: passing integration tests covering:
   - `/overview` for snapshot stats and quick actions
   - `/okrs` for draft generation + edit/save
   - `/checkins` for KR check-ins + recent history
+- UI status messages are now route-scoped and auto-expire (prevents stale toasts leaking into other pages).
+- Check-in submit handling is now per-KR in-flight guarded (prevents duplicate multi-click submissions while still allowing different KRs to submit in parallel).
 - Existing API contracts remain unchanged for draft/save/check-in flows.
 - API exposes deterministic health endpoint (`GET /health`).
 - API exposes module boundary list (`GET /modules`).

@@ -13,9 +13,16 @@
     "test:api": "npm run test -w @okr-copilot/api",
     "test:api:integration": "cross-env TWILIO_VERIFY_SIGNATURE=false REMINDER_WORKER_ENABLED=false npm run test:integration -w @okr-copilot/api",
     "migrate": "cross-env NODE_ENV=development npm run migrate -w @okr-copilot/api",
-    "setup:local": "node scripts/setup-local.mjs"
+    "setup:local": "node scripts/setup-local.mjs",
+    "deploy:local": "./scripts/deploy-local.sh",
+    "smoke:local": "./scripts/smoke-local.sh",
+    "validate:linux-target": "./scripts/validate-linux-target.sh",
+    "test:e2e:checkins": "playwright test -c e2e/playwright.checkins.config.ts",
+    "e2e:checkins:local": "./scripts/run-e2e-checkins-local.sh",
+    "e2e:checkins:linux": "./scripts/run-e2e-checkins-linux-container.sh"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "concurrently": "^9.2.1",
     "cross-env": "^7.0.3"
   }
