@@ -1,0 +1,51 @@
+previews:
+  generation: automatic
+
+services:
+  - type: web
+    name: okr-copilot
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_PORT
+        value: 10000
+      - key: SERVE_WEB_DIST
+        value: true
+      - key: WEB_DIST_DIR
+        value: apps/web/dist
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: okr-copilot-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: okr-copilot-redis
+          property: connectionString
+      - key: AUTH_STUB_ENABLED
+        value: true
+      - key: AUTH_STUB_TOKEN
+        sync: false
+      - key: REMINDER_WORKER_ENABLED
+        value: false
+      - key: TWILIO_VERIFY_SIGNATURE
+        value: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+  - type: redis
+    name: okr-copilot-redis
+    plan: starter
+    ipAllowList: []
+
+databases:
+  - name: okr-copilot-db
+    plan: starter
+    databaseName: okr_copilot
+    ipAllowList: []

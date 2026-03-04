@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'node:fs';
+import path from 'node:path';
 import { env } from './config/env.js';
 import { healthRouter } from './routes/health.js';
 import { readyRouter } from './routes/ready.js';
@@ -27,7 +29,7 @@ export function createApp() {
   app.use(express.json());
   app.use(authStubMiddleware(authProvider));
 
-  app.get('/', (_req, res) => {
+  app.get('/api', (_req, res) => {
     res.json({
       name: 'okr-copilot-api',
       status: 'running',
@@ -66,6 +68,24 @@ export function createApp() {
   app.use(whatsappSendRouter);
   app.use(remindersRouter);
   app.use(okrsRouter);
+
+  if (env.serveWebDist) {
+    const webDistDir = path.resolve(process.cwd(), env.webDistDir);
+    const webIndexPath = path.join(webDistDir, 'index.html');
+
+    if (!fs.existsSync(webIndexPath)) {
+      throw new Error(`[config.invalid] WEB_DIST_DIR is missing index.html: ${webIndexPath}`);
+    }
+
+    app.use(express.static(webDistDir));
+    app.get(/^(?!\/api|\/health|\/ready|\/modules|\/defaults|\/auth).*/, (_req, res) => {
+      res.sendFile(webIndexPath);
+    });
+  } else {
+    app.get('/', (_req, res) => {
+      res.redirect('/api');
+    });
+  }
 
   return app;
 }

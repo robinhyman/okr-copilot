@@ -1,0 +1,11 @@
+node_modules
+.git
+.github
+.local-run
+artifacts
+coverage
+*.core
+qemu_*.core
+.env
+.env.*
+apps/**/dist

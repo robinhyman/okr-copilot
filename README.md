@@ -132,6 +132,40 @@ npm test
 npm run e2e:checkins:local
 ```
 
+## PR preview deployments (Render)
+
+This repo now includes a PR preview deployment path so Robin can review changes in-browser without local deploy steps.
+
+What is configured:
+- `render.yaml` blueprint for a full-stack preview target (web + API in one Docker service, plus managed Postgres + Redis)
+- `Dockerfile` that builds both workspace apps and serves the React build from the API process
+- `.github/workflows/preview-url.yml` that runs on PR updates and posts/updates a PR comment with the expected preview URL
+
+Expected preview URL pattern:
+- `https://okr-copilot-pr-<PR_NUMBER>.onrender.com`
+
+One-time owner setup (Robin):
+1. Create a Render account/org and connect `robinhyman/okr-copilot` GitHub repo.
+2. Create a Blueprint service from this repo (`render.yaml`) on branch `main`.
+3. In Render settings, enable PR previews (automatic generation).
+4. Set required secret env vars at service level:
+   - `AUTH_STUB_TOKEN` (required)
+   - `OPENAI_API_KEY` (optional; if omitted, deterministic fallback remains active)
+5. Leave preview envs on non-production defaults:
+   - `REMINDER_WORKER_ENABLED=false`
+   - `TWILIO_VERIFY_SIGNATURE=false`
+   - no production Twilio credentials in preview.
+
+Behavior:
+- Every PR open/sync triggers Render preview deploy.
+- GitHub workflow updates a sticky PR comment with the expected preview link.
+- API health endpoint for checks: `/health`.
+
+Security notes:
+- Preview uses isolated managed preview data stores (from Render blueprint).
+- Do not copy production secrets into preview.
+- If WhatsApp/Twilio testing is needed, use dedicated sandbox credentials only.
+
 ## PR release evidence checklist
 Run this before opening/updating a PR:
 

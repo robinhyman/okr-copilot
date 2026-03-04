@@ -49,7 +49,12 @@ type ChatResponse = {
   metadata?: DraftMetadata;
 };
 
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
+const defaultApiBase =
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:4000'
+    : window.location.origin;
+
+const apiBase = import.meta.env.VITE_API_BASE_URL ?? defaultApiBase;
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
 const chatStorageKey = 'okr-copilot.chat.v1';
 

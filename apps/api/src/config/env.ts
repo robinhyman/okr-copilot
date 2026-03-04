@@ -1,8 +1,17 @@
 import dotenv from 'dotenv';
 import path from 'node:path';
 
+const resolveWorkspaceEnvPath = (): string => {
+  if (process.env.ENV_FILE_PATH?.trim()) {
+    return path.resolve(process.cwd(), process.env.ENV_FILE_PATH);
+  }
+
+  return path.resolve(process.cwd(), '../../.env');
+};
+
+const envPath = resolveWorkspaceEnvPath();
+
 // Load root project .env when running from apps/api workspace
-const envPath = path.resolve(process.cwd(), '../../.env');
 dotenv.config({ path: envPath });
 
 const toNumber = (value: string | undefined, fallback: number): number => {
@@ -50,7 +59,9 @@ export const env = {
   openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
   openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
   okrDraftLlmTimeoutMs: toNumber(process.env.OKR_DRAFT_LLM_TIMEOUT_MS, 15000),
-  okrDraftInputMaxChars: toNumber(process.env.OKR_DRAFT_INPUT_MAX_CHARS, 240)
+  okrDraftInputMaxChars: toNumber(process.env.OKR_DRAFT_INPUT_MAX_CHARS, 240),
+  serveWebDist: toBoolean(process.env.SERVE_WEB_DIST, false),
+  webDistDir: process.env.WEB_DIST_DIR ?? ''
 };
 
 export function validateStartupConfig(): void {
@@ -67,6 +78,10 @@ export function validateStartupConfig(): void {
     if (!env.twilioPublicBaseUrl.trim()) {
       issues.push('TWILIO_PUBLIC_BASE_URL must be set when TWILIO_VERIFY_SIGNATURE=true');
     }
+  }
+
+  if (env.serveWebDist && !env.webDistDir.trim()) {
+    issues.push('WEB_DIST_DIR must be set when SERVE_WEB_DIST=true');
   }
 
   if (issues.length) {
