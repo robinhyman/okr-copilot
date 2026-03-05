@@ -6,7 +6,7 @@ LOG_DIR="$ROOT_DIR/.local-run"
 API_LOG="$LOG_DIR/api.log"
 WEB_LOG="$LOG_DIR/web.log"
 
-LOCAL_IP="${LOCAL_IP:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo 127.0.0.1)}"
+LOCAL_IP="${LOCAL_IP:-$(/usr/sbin/ipconfig getifaddr en0 2>/dev/null || /usr/sbin/ipconfig getifaddr en1 2>/dev/null || echo 127.0.0.1)}"
 WEB_PORT="${WEB_PORT:-5173}"
 API_PORT="${API_PORT:-4000}"
 
@@ -95,7 +95,7 @@ npm run migrate
 echo "[deploy] starting API (logs: $API_LOG)"
 (
   cd "$ROOT_DIR/apps/api"
-  TWILIO_VERIFY_SIGNATURE=false REMINDER_WORKER_ENABLED=false CORS_ORIGIN="http://127.0.0.1:${WEB_PORT}" API_PORT="$API_PORT" npm run dev >"$API_LOG" 2>&1
+  TWILIO_VERIFY_SIGNATURE=false REMINDER_WORKER_ENABLED=false CORS_ORIGIN="http://127.0.0.1:${WEB_PORT},http://localhost:${WEB_PORT},http://${LOCAL_IP}:${WEB_PORT}" API_PORT="$API_PORT" npm run dev >"$API_LOG" 2>&1
 ) &
 API_PID=$!
 

@@ -13,6 +13,27 @@ import { whatsappSendRouter } from './routes/whatsapp-send.js';
 import { remindersRouter } from './routes/reminders.js';
 import { okrsRouter } from './routes/okrs.js';
 
+const isPrivateLanHost = (host: string): boolean => {
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
+  return false;
+};
+
+const isAllowedOrigin = (origin: string): boolean => {
+  if (env.corsOrigins.includes(origin)) return true;
+
+  if (env.nodeEnv !== 'development') return false;
+
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol.startsWith('http') && parsed.port === '5173' && isPrivateLanHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+
 export function createApp() {
   const app = express();
 
@@ -22,7 +43,15 @@ export function createApp() {
     displayName: env.authStubDisplayName
   });
 
-  app.use(cors({ origin: env.corsOrigin }));
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin) return callback(null, true);
+        if (isAllowedOrigin(origin)) return callback(null, true);
+        return callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
+    })
+  );
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json());
   app.use(authStubMiddleware(authProvider));
