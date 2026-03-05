@@ -275,3 +275,69 @@ test('read endpoints require auth and update missing OKR returns 404', async () 
   assert.equal(missingUpdate.status, 404);
   assert.equal(missingUpdate.body?.error, 'okr_not_found');
 });
+
+test('bulk upsert saves and reloads 5 objectives x 5 key results', async () => {
+  const app = createApp();
+
+  const objectives = Array.from({ length: 5 }, (_, objectiveIndex) => ({
+    objective: `Objective ${objectiveIndex + 1}`,
+    timeframe: 'Q2 2026',
+    keyResults: Array.from({ length: 5 }, (_, krIndex) => ({
+      title: `O${objectiveIndex + 1} KR ${krIndex + 1}`,
+      targetValue: 10,
+      currentValue: krIndex,
+      unit: 'pts'
+    }))
+  }));
+
+  const saveRes = await request(app)
+    .post('/api/okrs/bulk-upsert')
+    .set(authHeaders)
+    .send({ objectives });
+
+  assert.equal(saveRes.status, 200);
+  assert.equal(saveRes.body?.okrs?.length, 5);
+  assert.equal(saveRes.body?.okrs?.[0]?.keyResults?.length, 5);
+
+  const listRes = await request(app).get('/api/okrs').set(authHeaders);
+  assert.equal(listRes.status, 200);
+  assert.equal(listRes.body?.okrs?.length, 5);
+  assert.equal(listRes.body?.okrs?.[4]?.keyResults?.length, 5);
+});
+
+test('bulk upsert enforces objective and KR limits', async () => {
+  const app = createApp();
+
+  const tooManyObjectives = await request(app)
+    .post('/api/okrs/bulk-upsert')
+    .set(authHeaders)
+    .send({
+      objectives: Array.from({ length: 6 }, (_, i) => ({
+        objective: `Objective ${i + 1}`,
+        timeframe: 'Q2',
+        keyResults: [{ title: 'KR', targetValue: 1, currentValue: 0, unit: 'pts' }]
+      }))
+    });
+  assert.equal(tooManyObjectives.status, 400);
+  assert.equal(tooManyObjectives.body?.error, 'too_many_objectives');
+
+  const tooManyKrs = await request(app)
+    .post('/api/okrs/bulk-upsert')
+    .set(authHeaders)
+    .send({
+      objectives: [
+        {
+          objective: 'Objective 1',
+          timeframe: 'Q2',
+          keyResults: Array.from({ length: 6 }, (_, i) => ({
+            title: `KR ${i + 1}`,
+            targetValue: 1,
+            currentValue: 0,
+            unit: 'pts'
+          }))
+        }
+      ]
+    });
+  assert.equal(tooManyKrs.status, 400);
+  assert.equal(tooManyKrs.body?.error, 'too_many_key_results');
+});

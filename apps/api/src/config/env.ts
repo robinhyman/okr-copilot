@@ -18,10 +18,21 @@ const toBoolean = (value: string | undefined, fallback: boolean): boolean => {
   return fallback;
 };
 
+const parseOrigins = (value: string | undefined): string[] => {
+  const raw = value ?? 'http://localhost:5173,http://127.0.0.1:5173';
+  return raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const corsOrigins = parseOrigins(process.env.CORS_ORIGIN);
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   apiPort: toNumber(process.env.API_PORT, 4000),
-  corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+  corsOrigins,
+  corsOrigin: corsOrigins[0] ?? 'http://localhost:5173',
   appRegion: process.env.APP_REGION ?? 'UK/EU',
   dataResidency: process.env.DATA_RESIDENCY ?? 'uk-eu',
   databaseUrl:

@@ -11,6 +11,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 }
 });
+const MAX_OBJECTIVES = 5;
+const MAX_KEY_RESULTS_PER_OBJECTIVE = 5;
 
 function requesterUserId(req: any): string {
   return req.auth?.user?.id ?? 'single-user';
@@ -46,6 +48,7 @@ function parseOkrPayload(body: any) {
   }
 
   const keyResults = Array.isArray(body.keyResults) ? body.keyResults : [];
+  if (keyResults.length > MAX_KEY_RESULTS_PER_OBJECTIVE) return { error: 'too_many_key_results' as const };
   if (!keyResults.length) return { error: 'at_least_one_key_result_required' as const };
 
   for (const kr of keyResults) {
@@ -66,6 +69,23 @@ function parseOkrPayload(body: any) {
       }))
     }
   };
+}
+
+
+function parseOkrSetPayload(body: any) {
+  const objectives = Array.isArray(body?.objectives) ? body.objectives : null;
+  if (!objectives) return { error: 'invalid_okr_set_payload' as const };
+  if (!objectives.length) return { error: 'at_least_one_objective_required' as const };
+  if (objectives.length > MAX_OBJECTIVES) return { error: 'too_many_objectives' as const };
+
+  const parsedObjectives = [];
+  for (const objectivePayload of objectives) {
+    const parsed = parseOkrPayload(objectivePayload);
+    if ('error' in parsed) return { error: parsed.error };
+    parsedObjectives.push(parsed.input);
+  }
+
+  return { input: { objectives: parsedObjectives } };
 }
 
 okrsRouter.post('/api/okrs/draft', async (req, res) => {
@@ -136,6 +156,31 @@ okrsRouter.put('/api/okrs/:id', requireMutatingAuth, async (req, res) => {
     return res.status(200).json({ ok: true, okr });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_update_okr' });
+  }
+});
+
+
+okrsRouter.post('/api/okrs/bulk-upsert', requireMutatingAuth, async (req, res) => {
+  const parsed = parseOkrSetPayload(req.body);
+  if ('error' in parsed) return res.status(400).json({ ok: false, error: parsed.error });
+
+  try {
+    const userId = requesterUserId(req);
+    const existing = await listOkrsForUser(userId);
+
+    const upserted = [];
+    for (let i = 0; i < parsed.input.objectives.length; i += 1) {
+      const objective = parsed.input.objectives[i];
+      const existingId = existing[i]?.id;
+      const saved = existingId
+        ? await updateOkr(existingId, { userId, ...objective })
+        : await createOkr({ userId, ...objective });
+      if (saved) upserted.push(saved);
+    }
+
+    return res.status(200).json({ ok: true, okrs: upserted });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_bulk_upsert_okrs' });
   }
 });
 

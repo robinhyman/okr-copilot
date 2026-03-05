@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { OverviewSummary } from './OverviewSummary';
-import { buildOverviewMetrics } from '../lib/overviewMetrics';
+import { buildGroupedOverviewMetrics, buildOverviewMetrics } from '../lib/overviewMetrics';
 
 test('OverviewSummary renders empty state when no KRs', () => {
   const html = renderToStaticMarkup(createElement(OverviewSummary, { metrics: buildOverviewMetrics([]) }));
@@ -22,4 +22,34 @@ test('OverviewSummary renders status blocks and at-risk items', () => {
   assert.match(html, /KR status distribution/);
   assert.match(html, /Top at-risk KRs/);
   assert.match(html, /Risky KR/);
+});
+
+
+test('OverviewSummary renders grouped objective sections with objective and KR graphics', () => {
+  const metrics = buildGroupedOverviewMetrics([
+    {
+      id: 1,
+      objective: 'Grow pipeline',
+      timeframe: 'Q2',
+      keyResults: [
+        { id: 11, title: 'Book intros', currentValue: 3, targetValue: 10, unit: 'calls' },
+        { id: 12, title: 'Ship proposals', currentValue: 5, targetValue: 10, unit: 'proposals' }
+      ]
+    },
+    {
+      id: 2,
+      objective: 'Retention',
+      timeframe: 'Q2',
+      keyResults: [{ id: 21, title: 'NPS', currentValue: 40, targetValue: 50, unit: 'score' }]
+    }
+  ]);
+
+  const html = renderToStaticMarkup(createElement(OverviewSummary, { metrics }));
+  assert.match(html, /Grow pipeline/);
+  assert.match(html, /Book intros/);
+  assert.match(html, /data-testid="objective-progress-1"/);
+  assert.match(html, /data-testid="objective-progress-2"/);
+  assert.match(html, /data-testid="kr-progress-1-11"/);
+  assert.match(html, /data-testid="kr-progress-1-12"/);
+  assert.match(html, /data-testid="kr-progress-2-21"/);
 });

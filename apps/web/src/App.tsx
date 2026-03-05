@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getRoutePath, validateDraft, type RoutePath } from './lib/ui';
-import { buildOverviewMetrics } from './lib/overviewMetrics';
+import {
+  MAX_KEY_RESULTS_PER_OBJECTIVE,
+  MAX_OBJECTIVES,
+  getRoutePath,
+  validateObjectiveSet,
+  type RoutePath
+} from './lib/ui';
+import { buildGroupedOverviewMetrics } from './lib/overviewMetrics';
 import { OverviewSummary } from './components/OverviewSummary';
 
-type Draft = {
+type ObjectiveDraft = {
+  id?: number;
   objective: string;
   timeframe: string;
   keyResults: Array<{ id?: number; title: string; targetValue: number; currentValue: number; unit: string }>;
 };
+
+type Draft = { objectives: ObjectiveDraft[] };
 
 type DraftMetadata = {
   source: 'llm' | 'fallback';
@@ -47,11 +56,15 @@ type ChatResponse = {
   rationale?: string[];
   coachingContext?: CoachingContext;
   missingContext?: string[];
-  draft: Draft;
+  draft: ObjectiveDraft;
   metadata?: DraftMetadata;
 };
 
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
+const apiBase =
+  import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname)
+    ? `${window.location.protocol}//${window.location.hostname}:4000`
+    : 'http://localhost:4000');
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
 const chatStorageKey = 'okr-copilot.chat.v1';
 
@@ -125,34 +138,40 @@ export function App() {
 
   const active = useMemo(() => {
     if (draft) return draft;
-    const first = okrs[0];
-    if (!first) return null;
+    if (!okrs.length) return null;
     return {
-      objective: first.objective,
-      timeframe: first.timeframe,
-      keyResults: first.keyResults.map((kr) => ({
-        id: kr.id,
-        title: kr.title,
-        targetValue: Number(kr.target_value),
-        currentValue: Number(kr.current_value),
-        unit: kr.unit
+      objectives: okrs.slice(0, MAX_OBJECTIVES).map((okr) => ({
+        id: okr.id,
+        objective: okr.objective,
+        timeframe: okr.timeframe,
+        keyResults: okr.keyResults.slice(0, MAX_KEY_RESULTS_PER_OBJECTIVE).map((kr) => ({
+          id: kr.id,
+          title: kr.title,
+          targetValue: Number(kr.target_value),
+          currentValue: Number(kr.current_value),
+          unit: kr.unit
+        }))
       }))
     };
   }, [draft, okrs]);
 
-  const validationErrors = useMemo(() => validateDraft(active), [active]);
+  const validationErrors = useMemo(() => validateObjectiveSet(active), [active]);
   const showDraftEditor = Boolean(active) && (!isCoachingSessionActive || isDraftReadyFromChat);
   const editableDraft = showDraftEditor ? (active as Draft) : null;
 
   const overviewStats = useMemo(() => {
-    const keyResults = okrs[0]?.keyResults ?? [];
-    const progress = buildOverviewMetrics(
-      keyResults.map((kr) => ({
-        id: kr.id,
-        title: kr.title,
-        currentValue: Number(kr.current_value),
-        targetValue: Number(kr.target_value),
-        unit: kr.unit
+    const progress = buildGroupedOverviewMetrics(
+      okrs.map((okr) => ({
+        id: okr.id,
+        objective: okr.objective,
+        timeframe: okr.timeframe,
+        keyResults: okr.keyResults.map((kr) => ({
+          id: kr.id,
+          title: kr.title,
+          currentValue: Number(kr.current_value),
+          targetValue: Number(kr.target_value),
+          unit: kr.unit
+        }))
       }))
     );
 
@@ -243,7 +262,7 @@ export function App() {
   }
 
   async function refreshCheckinHistory(rows: ApiOkr[]) {
-    const keyResults = rows[0]?.keyResults ?? [];
+    const keyResults = rows.flatMap((row) => row.keyResults ?? []);
     if (!keyResults.length) {
       setCheckinHistory({});
       return;
@@ -320,7 +339,7 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: nextMessages,
-          draft: active ?? undefined,
+          draft: active?.objectives?.[0] ?? undefined,
           focusArea,
           timeframe
         })
@@ -330,7 +349,7 @@ export function App() {
       setMissingContext(response.missingContext ?? []);
 
       if (response.mode === 'refine') {
-        setDraft(response.draft);
+        setDraft({ objectives: [response.draft] });
         setDraftMetadata(response.metadata ?? null);
         setIsDraftReadyFromChat(true);
       }
@@ -373,17 +392,16 @@ export function App() {
     setScopedFeedback('info', 'Saving...', '/okrs');
 
     const payload = {
-      objective: active.objective,
-      timeframe: active.timeframe,
-      keyResults: active.keyResults
+      objectives: active.objectives.map((objective) => ({
+        objective: objective.objective,
+        timeframe: objective.timeframe,
+        keyResults: objective.keyResults
+      }))
     };
 
-    const existingId = okrs[0]?.id;
-    const isUpdate = Boolean(existingId);
-
     try {
-      await jsonFetch(isUpdate ? `/api/okrs/${existingId}` : '/api/okrs', {
-        method: isUpdate ? 'PUT' : 'POST',
+      await jsonFetch('/api/okrs/bulk-upsert', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-auth-stub-token': stubToken
@@ -391,9 +409,6 @@ export function App() {
         body: JSON.stringify(payload)
       });
 
-      if (Number.isFinite(existingId)) {
-        setChatScopeOkrId(existingId as number);
-      }
       setDraft(null);
       setDraftMetadata(null);
       const rows = await refreshOkrs();
@@ -405,7 +420,7 @@ export function App() {
       setIsDraftReadyFromChat(false);
       setMissingContext([]);
       await refreshCheckinHistory(rows);
-      setScopedFeedback('success', isUpdate ? 'OKR updated successfully.' : 'OKR created successfully.', '/okrs');
+      setScopedFeedback('success', 'Objectives saved successfully.', '/okrs');
     } catch (e: any) {
       setScopedFeedback('error', `Save failed: ${String(e?.message || e)}`, '/okrs');
     } finally {
@@ -493,27 +508,9 @@ export function App() {
             </div>
 
             {!!okrs.length ? (
-              <div className="panel nested">
-                <h3>Objectives</h3>
-                {okrs.map((okr) => (
-                  <div key={okr.id} className="objective-block">
-                    <p>
-                      <strong>{okr.objective}</strong> ({okr.timeframe})
-                    </p>
-                    <ul className="history">
-                      {okr.keyResults.map((kr) => (
-                        <li key={kr.id}>
-                          {kr.title} — {kr.current_value}/{kr.target_value} {kr.unit}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-                <p className="muted">
-                  Last check-in:{' '}
-                  {overviewStats.lastCheckinAt ? new Date(overviewStats.lastCheckinAt).toLocaleString() : 'No check-ins yet'}
-                </p>
-              </div>
+              <p className="muted" data-testid="overview-last-checkin">
+                Last check-in: {overviewStats.lastCheckinAt ? new Date(overviewStats.lastCheckinAt).toLocaleString() : 'No check-ins yet'}
+              </p>
             ) : (
               <p>No OKR yet. Head to OKRs to generate your first draft.</p>
             )}
@@ -582,79 +579,152 @@ export function App() {
             {showDraftEditor ? (
               <>
                 {!!draftMetadata && (
-                  <p className="badge">
-                    Draft source: <strong>{draftMetadata.source}</strong>
-                    {draftMetadata.source === 'fallback' && draftMetadata.reason ? ` (${draftMetadata.reason})` : ''}
-                  </p>
+                  <p className="badge">Draft source: <strong>{draftMetadata.source}</strong></p>
                 )}
 
-                <label>Objective</label>
-                <textarea
-                  className="full-width-input objective-input"
-                  value={editableDraft!.objective}
-                  onChange={(e) => setDraft({ ...editableDraft!, objective: e.target.value })}
-                />
-                <label>Timeframe</label>
-                <input
-                  className="full-width-input timeframe-input"
-                  value={editableDraft!.timeframe}
-                  onChange={(e) => setDraft({ ...editableDraft!, timeframe: e.target.value })}
-                />
+                {editableDraft!.objectives.map((objective, objectiveIndex) => (
+                  <div className="panel nested" key={objective.id ?? objectiveIndex}>
+                    <h3>Objective {objectiveIndex + 1}</h3>
+                    <label>Objective</label>
+                    <textarea
+                      className="full-width-input objective-input"
+                      value={objective.objective}
+                      onChange={(e) => {
+                        const next = [...editableDraft!.objectives];
+                        next[objectiveIndex] = { ...objective, objective: e.target.value };
+                        setDraft({ objectives: next });
+                      }}
+                    />
+                    <label>Timeframe</label>
+                    <input
+                      className="full-width-input timeframe-input"
+                      value={objective.timeframe}
+                      onChange={(e) => {
+                        const next = [...editableDraft!.objectives];
+                        next[objectiveIndex] = { ...objective, timeframe: e.target.value };
+                        setDraft({ objectives: next });
+                      }}
+                    />
 
-                <h3>Key Results</h3>
-                {editableDraft!.keyResults.map((kr, index) => (
-                  <div className="kr" key={kr.id ?? index}>
-                    <input
-                      className="kr-title-input"
-                      value={kr.title}
-                      onChange={(e) => {
-                        const next = [...editableDraft!.keyResults];
-                        next[index] = { ...kr, title: e.target.value };
-                        setDraft({ ...editableDraft!, keyResults: next });
-                      }}
-                    />
-                    <input
-                      type="number"
-                      value={kr.currentValue}
-                      onChange={(e) => {
-                        const next = [...editableDraft!.keyResults];
-                        next[index] = { ...kr, currentValue: Number(e.target.value || 0) };
-                        setDraft({ ...editableDraft!, keyResults: next });
-                      }}
-                    />
-                    <span>/</span>
-                    <input
-                      type="number"
-                      value={kr.targetValue}
-                      onChange={(e) => {
-                        const next = [...editableDraft!.keyResults];
-                        next[index] = { ...kr, targetValue: Number(e.target.value || 0) };
-                        setDraft({ ...editableDraft!, keyResults: next });
-                      }}
-                    />
-                    <input
-                      value={kr.unit}
-                      onChange={(e) => {
-                        const next = [...editableDraft!.keyResults];
-                        next[index] = { ...kr, unit: e.target.value };
-                        setDraft({ ...editableDraft!, keyResults: next });
-                      }}
-                    />
+                    <h4>Key Results</h4>
+                    {objective.keyResults.map((kr, index) => (
+                      <div className="kr" key={kr.id ?? index}>
+                        <input
+                          className="kr-title-input"
+                          value={kr.title}
+                          onChange={(e) => {
+                            const nextObjectives = [...editableDraft!.objectives];
+                            const nextKrs = [...objective.keyResults];
+                            nextKrs[index] = { ...kr, title: e.target.value };
+                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
+                            setDraft({ objectives: nextObjectives });
+                          }}
+                        />
+                        <input
+                          type="number"
+                          value={kr.currentValue}
+                          onChange={(e) => {
+                            const nextObjectives = [...editableDraft!.objectives];
+                            const nextKrs = [...objective.keyResults];
+                            nextKrs[index] = { ...kr, currentValue: Number(e.target.value || 0) };
+                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
+                            setDraft({ objectives: nextObjectives });
+                          }}
+                        />
+                        <span>/</span>
+                        <input
+                          type="number"
+                          value={kr.targetValue}
+                          onChange={(e) => {
+                            const nextObjectives = [...editableDraft!.objectives];
+                            const nextKrs = [...objective.keyResults];
+                            nextKrs[index] = { ...kr, targetValue: Number(e.target.value || 0) };
+                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
+                            setDraft({ objectives: nextObjectives });
+                          }}
+                        />
+                        <input
+                          value={kr.unit}
+                          onChange={(e) => {
+                            const nextObjectives = [...editableDraft!.objectives];
+                            const nextKrs = [...objective.keyResults];
+                            nextKrs[index] = { ...kr, unit: e.target.value };
+                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
+                            setDraft({ objectives: nextObjectives });
+                          }}
+                        />
+                        <button
+                          className="secondary"
+                          disabled={objective.keyResults.length <= 1}
+                          onClick={() => {
+                            const nextObjectives = [...editableDraft!.objectives];
+                            nextObjectives[objectiveIndex] = {
+                              ...objective,
+                              keyResults: objective.keyResults.filter((_, i) => i !== index)
+                            };
+                            setDraft({ objectives: nextObjectives });
+                          }}
+                        >
+                          Remove KR
+                        </button>
+                      </div>
+                    ))}
+                    <div className="row">
+                      <button
+                        className="secondary"
+                        disabled={objective.keyResults.length >= MAX_KEY_RESULTS_PER_OBJECTIVE}
+                        onClick={() => {
+                          const nextObjectives = [...editableDraft!.objectives];
+                          nextObjectives[objectiveIndex] = {
+                            ...objective,
+                            keyResults: [
+                              ...objective.keyResults,
+                              { title: '', currentValue: 0, targetValue: 1, unit: 'points' }
+                            ]
+                          };
+                          setDraft({ objectives: nextObjectives });
+                        }}
+                      >
+                        Add KR
+                      </button>
+                      <button
+                        className="secondary"
+                        disabled={editableDraft!.objectives.length <= 1}
+                        onClick={() => {
+                          setDraft({ objectives: editableDraft!.objectives.filter((_, i) => i !== objectiveIndex) });
+                        }}
+                      >
+                        Remove objective
+                      </button>
+                    </div>
                   </div>
                 ))}
 
+                <button
+                  className="secondary"
+                  disabled={editableDraft!.objectives.length >= MAX_OBJECTIVES}
+                  onClick={() =>
+                    setDraft({
+                      objectives: [
+                        ...editableDraft!.objectives,
+                        {
+                          objective: '',
+                          timeframe: timeframe,
+                          keyResults: [{ title: '', currentValue: 0, targetValue: 1, unit: 'points' }]
+                        }
+                      ]
+                    })
+                  }
+                >
+                  Add objective
+                </button>
+
                 {!!validationErrors.length && (
-                  <ul className="validation-list">
-                    {validationErrors.map((err) => (
-                      <li key={err}>{err}</li>
-                    ))}
-                  </ul>
+                  <ul className="validation-list">{validationErrors.map((err) => <li key={err}>{err}</li>)}</ul>
                 )}
 
                 <div className="sticky-actions">
-                  <button disabled={isSaving} onClick={() => saveOkr()}>
-                    {isSaving ? 'Saving...' : 'Save OKR'}
-                  </button>
+                  <button disabled={isSaving} onClick={() => saveOkr()}>{isSaving ? 'Saving...' : 'Save objectives'}</button>
                 </div>
               </>
             ) : (
@@ -671,13 +741,15 @@ export function App() {
           <section className="panel">
             <h2>Check-ins</h2>
             {!!okrs.length ? (
-              okrs[0].keyResults.map((kr) => (
-                <div key={kr.id} className="checkin" data-testid={`checkin-row-${kr.id}`}>
-                  <div>
-                    <strong>{kr.title}</strong> ({kr.current_value}/{kr.target_value} {kr.unit})
-                  </div>
-                  <div className="row">
-                    <input
+              okrs.map((okr) => (
+                <div key={okr.id} className="panel nested">
+                  <h3>{okr.objective}</h3>
+                  {okr.keyResults.map((kr) => (
+                    <div key={kr.id} className="checkin" data-testid={`checkin-row-${kr.id}`}>
+                      <div>
+                        <strong>{kr.title}</strong> ({kr.current_value}/{kr.target_value} {kr.unit})
+                      </div>
+                      <div className="row">                     <input
                       type="number"
                       placeholder="New value"
                       data-testid={`checkin-value-${kr.id}`}
@@ -706,17 +778,18 @@ export function App() {
                       onClick={() => submitCheckin(kr.id)}
                     >
                       {submittingKrIds[kr.id] ? 'Submitting...' : 'Submit check-in'}
-                    </button>
-                  </div>
-                  <ul className="history" data-testid={`checkin-history-${kr.id}`}>
-                    {(checkinHistory[kr.id] ?? []).map((entry) => (
-                      <li key={entry.id}>
-                        <strong>{entry.value}</strong> — {entry.commentary || 'No commentary'}
-                        <span> ({new Date(entry.created_at).toLocaleString()})</span>
-                      </li>
-                    ))}
-                    {!checkinHistory[kr.id]?.length && <li>No check-in history yet.</li>}
-                  </ul>
+                    </button> </div>
+                      <ul className="history" data-testid={`checkin-history-${kr.id}`}>
+                        {(checkinHistory[kr.id] ?? []).map((entry) => (
+                          <li key={entry.id}>
+                            <strong>{entry.value}</strong> — {entry.commentary || 'No commentary'}
+                            <span> ({new Date(entry.created_at).toLocaleString()})</span>
+                          </li>
+                        ))}
+                        {!checkinHistory[kr.id]?.length && <li>No check-in history yet.</li>}
+                      </ul>
+                    </div>
+                  ))}
                 </div>
               ))
             ) : (
@@ -724,6 +797,7 @@ export function App() {
             )}
           </section>
         )}
+
 
         {!!feedback && feedback.scope === route && (
           <p data-testid={`route-feedback-${route.slice(1)}`} className={`status ${feedback.type}`}>
