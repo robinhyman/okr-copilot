@@ -132,6 +132,24 @@ npm test
 npm run e2e:checkins:local
 ```
 
+## Operational quality gates (default demo/release rails)
+```bash
+# Full demo prep: migrate + seed + verification checks + PASS/FAIL summary
+npm run demo:prepare
+
+# Release gate: typecheck + build + tests + demo prep + acceptance checks
+npm run release:gate
+```
+
+Expected terminal markers:
+- `DEMO_PREPARE: PASS` (or `FAIL`)
+- `RELEASE_GATE: PASS` (or `FAIL`)
+
+Default env flags (see `.env.example`):
+- `COACH_LLM_REQUIRED=false` — when true, quality checks fail if `OPENAI_API_KEY` is missing or coach metadata source is not `llm`.
+- `DEMO_STRICT_GATES=true` — strict mode for gate scripts.
+- `OKR_DRAFT_LLM_TIMEOUT_MS=30000` — configurable coach LLM timeout (ms).
+
 ## PR release evidence checklist
 Run this before opening/updating a PR:
 
@@ -167,7 +185,7 @@ Env vars (see `.env.example`):
 - `OPENAI_API_KEY` (optional but required for live LLM path)
 - `OPENAI_MODEL` (default `gpt-4o-mini`)
 - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
-- `OKR_DRAFT_LLM_TIMEOUT_MS` (default `5000`)
+- `OKR_DRAFT_LLM_TIMEOUT_MS` (default `30000`)
 - `OKR_DRAFT_INPUT_MAX_CHARS` (default `240`)
 
 Quick local validation:
@@ -207,6 +225,11 @@ Expected: passing integration tests covering:
 - operator requeue of failed reminders
 - invalid `dueAtIso` returns HTTP 400
 - OKR happy path: draft -> save -> update -> check-in -> fetch + check-in history
+
+## Product increment default standard
+
+- Default playbook for every increment request: `docs/product-increment-delivery-standard.md`
+- Unless explicitly overridden (e.g., spike/design-only), increments are considered complete only when demo-ready with seeded data, persona validation, and test evidence.
 
 ## Current behavior
 - Web app now uses a route shell with three pages:

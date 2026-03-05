@@ -21,7 +21,9 @@
     "e2e:checkins:local": "./scripts/run-e2e-checkins-local.sh",
     "e2e:checkins:linux": "./scripts/run-e2e-checkins-linux-container.sh",
     "release:checklist": "bash scripts/verify-pr-evidence.sh",
-    "seed:demo": "./scripts/seed-demo.sh"
+    "seed:demo": "./scripts/seed-demo.sh",
+    "demo:prepare": "node scripts/demo-prepare.mjs",
+    "release:gate": "node scripts/release-gate.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",

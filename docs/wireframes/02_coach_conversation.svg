@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <rect width="1400" height="900" fill="#f4f6fb"/>
+  <rect x="30" y="30" width="1340" height="840" rx="16" fill="#fff" stroke="#d8dbe8"/>
+  <text x="70" y="85" font-family="Arial" font-size="30" font-weight="700" fill="#111827">OKR Coach Conversation</text>
+
+  <rect x="70" y="120" width="820" height="700" rx="12" fill="#ffffff" stroke="#d7dbe8"/>
+  <text x="95" y="160" font-family="Arial" font-size="20" font-weight="700" fill="#111827">Conversation</text>
+
+  <rect x="95" y="185" width="760" height="78" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="115" y="225" font-family="Arial" font-size="18" fill="#1e3a8a">Coach: What area are you looking to set goals for?</text>
+
+  <rect x="170" y="280" width="685" height="72" rx="10" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="190" y="320" font-family="Arial" font-size="18" fill="#111827">User: Enterprise onboarding conversion for EMEA.</text>
+
+  <rect x="95" y="370" width="760" height="96" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="115" y="410" font-family="Arial" font-size="18" fill="#1e3a8a">Coach: Great. What is your current baseline and target timeframe?</text>
+  <text x="115" y="438" font-family="Arial" font-size="18" fill="#1e3a8a">Any key constraints I should account for?</text>
+
+  <rect x="170" y="485" width="685" height="92" rx="10" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="190" y="525" font-family="Arial" font-size="18" fill="#111827">User: Baseline 14% demo-to-paid. Goal by Q3. No extra headcount.</text>
+  <text x="190" y="553" font-family="Arial" font-size="18" fill="#111827">Need quality pipeline, not just volume.</text>
+
+  <rect x="95" y="705" width="760" height="84" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="120" y="753" font-family="Arial" font-size="18" fill="#6b7280">Type your response…</text>
+  <rect x="740" y="722" width="95" height="50" rx="8" fill="#2563eb"/>
+  <text x="772" y="754" font-family="Arial" font-size="20" fill="#fff" font-weight="700">Send</text>
+
+  <rect x="920" y="120" width="420" height="700" rx="12" fill="#f8fafc" stroke="#dbe3f0"/>
+  <text x="950" y="160" font-family="Arial" font-size="20" font-weight="700" fill="#111827">Context captured so far</text>
+  <text x="950" y="205" font-family="Arial" font-size="17" fill="#374151">Area: EMEA onboarding conversion</text>
+  <text x="950" y="236" font-family="Arial" font-size="17" fill="#374151">Baseline: 14%</text>
+  <text x="950" y="267" font-family="Arial" font-size="17" fill="#374151">Timeframe: Q3</text>
+  <text x="950" y="298" font-family="Arial" font-size="17" fill="#374151">Constraints: No extra headcount</text>
+  <text x="950" y="329" font-family="Arial" font-size="17" fill="#374151">Quality bar maintained</text>
+
+  <rect x="950" y="730" width="360" height="56" rx="8" fill="#10b981"/>
+  <text x="1012" y="765" font-family="Arial" font-size="22" font-weight="700" fill="#fff">Generate draft now</text>
+</svg>

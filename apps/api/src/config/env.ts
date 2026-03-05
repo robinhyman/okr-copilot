@@ -60,8 +60,10 @@ export const env = {
   excelInputPath: process.env.EXCEL_INPUT_PATH ?? './data/sample-krs.xlsx',
   openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
   openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
-  okrDraftLlmTimeoutMs: toNumber(process.env.OKR_DRAFT_LLM_TIMEOUT_MS, 15000),
-  okrDraftInputMaxChars: toNumber(process.env.OKR_DRAFT_INPUT_MAX_CHARS, 240)
+  okrDraftLlmTimeoutMs: toNumber(process.env.OKR_DRAFT_LLM_TIMEOUT_MS, 30000),
+  okrDraftInputMaxChars: toNumber(process.env.OKR_DRAFT_INPUT_MAX_CHARS, 240),
+  coachLlmRequired: toBoolean(process.env.COACH_LLM_REQUIRED, false),
+  demoStrictGates: toBoolean(process.env.DEMO_STRICT_GATES, true)
 };
 
 export function validateStartupConfig(): void {
@@ -78,6 +80,10 @@ export function validateStartupConfig(): void {
     if (!env.twilioPublicBaseUrl.trim()) {
       issues.push('TWILIO_PUBLIC_BASE_URL must be set when TWILIO_VERIFY_SIGNATURE=true');
     }
+  }
+
+  if (env.coachLlmRequired && !(process.env.OPENAI_API_KEY ?? '').trim()) {
+    issues.push('OPENAI_API_KEY must be set when COACH_LLM_REQUIRED=true');
   }
 
   if (issues.length) {

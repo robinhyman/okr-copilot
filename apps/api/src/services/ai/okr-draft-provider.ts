@@ -54,9 +54,25 @@ export interface OkrConversationResult {
   metadata: OkrDraftMetadata;
 }
 
+export interface OkrWizardDraftRequest {
+  focusArea: string;
+  timeframe: string;
+  baseline: string;
+  baselineStructured?: {
+    value?: number;
+    unit?: string;
+    period?: string;
+  };
+  constraints: string;
+  objectiveStatement: string;
+  keyResultCount?: number;
+  aiAssist?: boolean;
+}
+
 export interface OkrDraftProvider {
   generateDraft(input: OkrDraftRequest): Promise<OkrDraftResult>;
   continueConversation(input: OkrConversationRequest): Promise<OkrConversationResult>;
+  generateWizardDraft(input: OkrWizardDraftRequest): Promise<OkrDraftResult>;
 }
 
 const DEFAULT_TIMEFRAME = 'Q2 2026';
@@ -172,8 +188,72 @@ function getMissingContext(ctx: OkrCoachingContext): string[] {
   return missing;
 }
 
+type RequiredContextField = 'outcome' | 'baseline' | 'target' | 'constraints' | 'timeframe';
+
+function extractTargetIntent(messages: OkrConversationMessage[]): string | undefined {
+  const userText = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+  const targetMatch = userText.match(/(?:target|goal|increase|decrease|reduce|to\s+\d+(?:\.\d+)?\s*%?|by\s+q[1-4])/i);
+  return targetMatch?.[0];
+}
+
+function getMissingChecklist(ctx: OkrCoachingContext, target?: string): RequiredContextField[] {
+  const missing: RequiredContextField[] = [];
+  if (!ctx.outcome) missing.push('outcome');
+  if (!ctx.baseline) missing.push('baseline');
+  if (!target) missing.push('target');
+  if (!ctx.constraints) missing.push('constraints');
+  if (!ctx.timeframe) missing.push('timeframe');
+  return missing;
+}
+
+function missingFieldQuestion(field: RequiredContextField): string {
+  if (field === 'outcome') return 'What specific business outcome should this OKR move?';
+  if (field === 'baseline') return 'What’s your current baseline metric and value?';
+  if (field === 'target') return 'What target value do you want by when?';
+  if (field === 'constraints') return 'What constraints should we respect?';
+  return 'What timeframe should we commit this OKR to?';
+}
+
+function normalizeMessageKey(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function ensureNonLoopingAssistantMessage(input: {
+  proposed: string;
+  messages: OkrConversationMessage[];
+  missingChecklist: RequiredContextField[];
+}): string {
+  const lastAssistant = [...input.messages].reverse().find((m) => m.role === 'assistant')?.content;
+  const proposed = input.proposed.trim();
+  if (!lastAssistant) return proposed;
+  if (normalizeMessageKey(lastAssistant) !== normalizeMessageKey(proposed)) return proposed;
+
+  const missing = input.missingChecklist[0];
+  if (missing) return `${missingFieldQuestion(missing)} Please include concrete numbers where possible.`;
+  return `${proposed} Tell me one specific refinement to apply next.`;
+}
+
 function isKrFormatValid(title: string): boolean {
   return /^(increase|decrease|reduce|grow|improve)\s.+\sfrom\s.+\sto\s.+$/i.test(title.trim());
+}
+
+function parseBaselineNumber(baseline: string, fallback: number): number {
+  const match = baseline.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return fallback;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseUnit(text: string): string {
+  const lowered = text.toLowerCase();
+  if (lowered.includes('%') || lowered.includes('percent')) return '%';
+  if (lowered.includes('day')) return 'days';
+  if (lowered.includes('hour')) return 'hours';
+  if (lowered.includes('week')) return 'weeks';
+  if (lowered.includes('month')) return 'months';
+  if (lowered.includes('revenue') || lowered.includes('£') || lowered.includes('gbp')) return 'GBP';
+  if (lowered.includes('customer')) return 'customers';
+  return 'points';
 }
 
 class DeterministicDraftProvider {
@@ -200,15 +280,59 @@ class DeterministicDraftProvider {
     );
   }
 
+  generateFromWizard(input: OkrWizardDraftRequest): OkrDraft {
+    const focusArea = capText(input.focusArea, DEFAULT_FOCUS);
+    const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
+    const baseline = capText(input.baseline, 'Baseline unknown');
+    const constraints = capText(input.constraints, 'Keep scope realistic for current team capacity');
+    const objectiveStatement = capText(input.objectiveStatement, `Improve ${focusArea.toLowerCase()} outcomes`);
+    const structuredUnit = input.baselineStructured?.unit?.trim();
+    const structuredValue = Number(input.baselineStructured?.value);
+    const structuredPeriod = input.baselineStructured?.period?.trim();
+    const unit = structuredUnit || parseUnit(`${baseline} ${objectiveStatement}`);
+    const baselineValue = Number.isFinite(structuredValue)
+      ? structuredValue
+      : parseBaselineNumber(baseline, unit === '%' ? 40 : 1);
+    const keyResultCount = Math.max(2, Math.min(5, Number(input.keyResultCount) || 3));
+
+    const multipliers = [1.2, 1.35, 1.5, 1.15, 1.25];
+    const keyResults = Array.from({ length: keyResultCount }, (_, index) => {
+      const target = unit === 'days'
+        ? Math.max(1, Math.round(baselineValue * (1 - Math.min(0.4, (index + 1) * 0.1))))
+        : Math.round((baselineValue * multipliers[index]) * 100) / 100;
+      const titleSuffix = structuredPeriod ? ` per ${structuredPeriod}` : '';
+      const title = unit === 'days'
+        ? `Reduce ${focusArea.toLowerCase()} cycle time from ${baselineValue}${titleSuffix} to ${target}${titleSuffix}`
+        : `Increase ${focusArea.toLowerCase()} outcome metric ${index + 1} from ${baselineValue}${titleSuffix} to ${target}${titleSuffix}`;
+
+      return {
+        title,
+        currentValue: baselineValue,
+        targetValue: target,
+        unit
+      };
+    });
+
+    return normalizeDraftShape(
+      {
+        objective: `${objectiveStatement} (${constraints})`,
+        timeframe,
+        keyResults
+      },
+      timeframe
+    );
+  }
+
   continueConversation(input: OkrConversationRequest): OkrConversationResult {
     const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
     const baseDraft = input.draft ? normalizeDraftShape(input.draft, timeframe) : this.generate(input);
     const safeMessages = sanitizeMessages(input.messages);
-    const userTurns = safeMessages.filter((message) => message.role === 'user').length;
     const lastUserMessage = [...safeMessages].reverse().find((message) => message.role === 'user');
     const instruction = (lastUserMessage?.content || '').toLowerCase();
     const coachingContext = extractCoachingContext(safeMessages, timeframe);
-    const missingContext = getMissingContext(coachingContext);
+    const targetIntent = extractTargetIntent(safeMessages);
+    const missingChecklist = getMissingChecklist(coachingContext, targetIntent);
+    const missingContext = missingChecklist.map((field) => (field === 'target' ? 'target_value' : field));
 
     const revisedDraft: OkrDraft = {
       ...baseDraft,
@@ -216,20 +340,16 @@ class DeterministicDraftProvider {
       keyResults: baseDraft.keyResults.map((kr) => ({ ...kr }))
     };
 
-    const shouldProbe = userTurns < 2 || missingContext.length > 0;
+    const shouldProbe = missingChecklist.length > 0;
 
     if (shouldProbe) {
-      const questions = [
-        missingContext.includes('outcome')
-          ? 'What single business outcome should this OKR move (e.g. revenue, retention, activation)?'
-          : 'What is the priority tradeoff to optimize for (speed, quality, or efficiency)?',
-        missingContext.includes('baseline')
-          ? 'What are your current baseline numbers so we can set targets from a known starting point?'
-          : 'Any hard constraints (team size, budget, time) I should factor into ambition?'
-      ];
-
+      const questions = missingChecklist.map(missingFieldQuestion).slice(0, 2);
       return {
-        assistantMessage: 'Great start. Before I generate the first draft, I need a bit more context.',
+        assistantMessage: ensureNonLoopingAssistantMessage({
+          proposed: questions[0] ?? 'Share more detail so I can produce a measurable OKR draft.',
+          messages: safeMessages,
+          missingChecklist
+        }),
         mode: 'questions',
         questions,
         rationale: ['Coaching-first flow keeps first draft grounded in real constraints and baselines.'],
@@ -292,11 +412,16 @@ class DeterministicDraftProvider {
       };
     }
 
+    const refinedMessage = lastUserMessage?.content
+      ? `Updated. I applied your latest instruction: "${lastUserMessage.content}".`
+      : 'I have a complete draft. Tell me what to refine (for example: tighten KR2 or adjust ambition).';
+
     return {
-      assistantMessage:
-        lastUserMessage?.content
-          ? `Updated. I applied your latest instruction: "${lastUserMessage.content}".`
-          : 'I can help refine this draft. Tell me what to change (e.g. “make KR2 more measurable” or “reduce ambition by 20%”).',
+      assistantMessage: ensureNonLoopingAssistantMessage({
+        proposed: refinedMessage,
+        messages: safeMessages,
+        missingChecklist: []
+      }),
       mode: 'refine',
       rationale: ['Applied requested refinement with minimal draft changes.', 'Kept KRs measurable and realistic.'],
       coachingContext,
@@ -385,6 +510,23 @@ class OpenAiDraftProvider {
     return normalizeDraftShape(extractJsonObject(content), timeframe);
   }
 
+  async generateFromWizard(input: OkrWizardDraftRequest): Promise<OkrDraft> {
+    const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
+    const content = await this.complete([
+      {
+        role: 'system',
+        content:
+          'You draft final OKRs from deterministic wizard inputs. Return JSON only with keys objective, timeframe, keyResults[title,targetValue,currentValue,unit]. KR titles must follow: <direction> <metric> from <baseline> to <target>.'
+      },
+      {
+        role: 'user',
+        content: `focusArea: ${capText(input.focusArea, DEFAULT_FOCUS)}\ntimeframe: ${timeframe}\nbaseline: ${capText(input.baseline, 'unknown')}\nbaselineValue: ${Number(input.baselineStructured?.value)}\nbaselineUnit: ${capText(input.baselineStructured?.unit, 'unknown')}\nbaselinePeriod: ${capText(input.baselineStructured?.period, 'unknown')}\nconstraints: ${capText(input.constraints, 'none')}\nobjectiveStatement: ${capText(input.objectiveStatement, '')}\nkeyResultCount: ${Math.max(2, Math.min(5, Number(input.keyResultCount) || 3))}`
+      }
+    ]);
+
+    return normalizeDraftShape(extractJsonObject(content), timeframe);
+  }
+
   async continueConversation(input: OkrConversationRequest): Promise<OkrConversationResult> {
     const timeframe = capText(input.timeframe, DEFAULT_TIMEFRAME);
     const safeMessages = sanitizeMessages(input.messages);
@@ -433,18 +575,29 @@ class OpenAiDraftProvider {
     };
 
     const normalizedDraft = normalizeDraftShape(payload.draft ?? baseDraft, timeframe);
+    const inferredContext = { ...extractCoachingContext(safeMessages, timeframe), ...coachingContext };
+    const targetIntent = extractTargetIntent(safeMessages);
+    const missingChecklist = getMissingChecklist(inferredContext, targetIntent);
     const missingContext = Array.isArray(payload.missingContext)
       ? payload.missingContext.filter((m): m is string => typeof m === 'string').slice(0, 6)
-      : getMissingContext({ ...extractCoachingContext(safeMessages, timeframe), ...coachingContext });
+      : missingChecklist.map((field) => (field === 'target' ? 'target_value' : field));
 
     const hasBadKrFormat = normalizedDraft.keyResults.some((kr) => !isKrFormatValid(kr.title));
-    const gatedMode = missingContext.length > 0 || hasBadKrFormat ? 'questions' : payload.mode === 'questions' ? 'questions' : 'refine';
+    const gatedMode = missingChecklist.length > 0 || hasBadKrFormat ? 'questions' : payload.mode === 'questions' ? 'questions' : 'refine';
+
+    const assistantMessageRaw =
+      typeof payload.assistantMessage === 'string' && payload.assistantMessage.trim()
+        ? payload.assistantMessage.trim().slice(0, 1000)
+        : gatedMode === 'questions'
+          ? missingFieldQuestion(missingChecklist[0] ?? 'outcome')
+          : 'I revised the draft. Tell me the next refinement you want.';
 
     return {
-      assistantMessage:
-        typeof payload.assistantMessage === 'string' && payload.assistantMessage.trim()
-          ? payload.assistantMessage.trim().slice(0, 1000)
-          : 'I revised the draft. Tell me the next refinement you want.',
+      assistantMessage: ensureNonLoopingAssistantMessage({
+        proposed: assistantMessageRaw,
+        messages: safeMessages,
+        missingChecklist
+      }),
       mode: gatedMode,
       questions:
         gatedMode === 'questions' && questions.length === 0
@@ -494,6 +647,46 @@ class ResilientDraftProvider implements OkrDraftProvider {
         }
       };
     }
+  }
+
+  async generateWizardDraft(input: OkrWizardDraftRequest): Promise<OkrDraftResult> {
+    const startedAt = Date.now();
+
+    if (input.aiAssist) {
+      try {
+        const draft = await this.llmProvider.generateFromWizard(input);
+        return {
+          draft,
+          metadata: {
+            source: 'llm',
+            provider: 'openai',
+            model: getOpenAiModel(),
+            durationMs: Date.now() - startedAt
+          }
+        };
+      } catch (error: any) {
+        const fallbackDraft = this.fallbackProvider.generateFromWizard(input);
+        return {
+          draft: fallbackDraft,
+          metadata: {
+            source: 'fallback',
+            provider: 'deterministic',
+            reason: error?.name === 'AbortError' ? 'llm_timeout' : (error?.message ?? 'llm_failed'),
+            durationMs: Date.now() - startedAt
+          }
+        };
+      }
+    }
+
+    return {
+      draft: this.fallbackProvider.generateFromWizard(input),
+      metadata: {
+        source: 'fallback',
+        provider: 'deterministic',
+        reason: 'ai_assist_disabled',
+        durationMs: Date.now() - startedAt
+      }
+    };
   }
 
   async continueConversation(input: OkrConversationRequest): Promise<OkrConversationResult> {
