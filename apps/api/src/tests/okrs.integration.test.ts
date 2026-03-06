@@ -200,7 +200,7 @@ test('chat endpoint refines a draft and returns assistant message', async () => 
                 {
                   role: 'user',
                   content:
-                    'Baseline is 3 shipped playbooks per quarter, target 5 this quarter. Constraints: team of 2 and no extra budget. Timeframe: Q2 2026.'
+                    'Why: we need faster, more predictable delivery to improve competitiveness and protect renewals. Baseline is 3 shipped playbooks per quarter, target 5 this quarter. Constraints: team of 2 and no extra budget. Timeframe: Q2 2026.'
                 }
               ]
             });
@@ -300,7 +300,7 @@ test('chat refinement does not stay in repeated-question loop once full context 
           {
             role: 'user',
             content:
-              'Outcome: increase renewal rate. Baseline: renewal is 78%. Constraints: team of 3 and fixed budget. Timeframe: Q2 2026. Please generate first draft now.'
+              'Outcome: increase renewal rate. Why: improve retention economics and defend market share. Baseline: renewal is 78%. Target: 85% by end of Q2 2026. Constraints: team of 3 and fixed budget. Timeframe: Q2 2026. Please generate first draft now.'
           }
         ]
       });

@@ -54,12 +54,58 @@ export function classifyKrStatus(progressRatio: number): KrStatus {
   return 'off-track';
 }
 
+function inferKrDirection(title: string): 'increase' | 'decrease' | 'maintain' {
+  const normalized = title.toLowerCase();
+  if (/\b(maintain|keep|at or below|no more than|at most|<=)\b/.test(normalized)) return 'maintain';
+  if (/\b(reduce|decrease|lower|cut|drop|shorten)\b/.test(normalized)) return 'decrease';
+  return 'increase';
+}
+
+function parseFromToValues(title: string): { from?: number; to?: number } {
+  const match = title.match(/from\s+(-?\d+(?:\.\d+)?)\D+to\s+(-?\d+(?:\.\d+)?)/i);
+  if (!match) return {};
+  const from = Number(match[1]);
+  const to = Number(match[2]);
+  return {
+    from: Number.isFinite(from) ? from : undefined,
+    to: Number.isFinite(to) ? to : undefined
+  };
+}
+
 function mapKrMetric(kr: OverviewKrInput): OverviewKrMetric {
   const target = Number.isFinite(kr.targetValue) ? kr.targetValue : 0;
   const current = Number.isFinite(kr.currentValue) ? kr.currentValue : 0;
-  const progressRatio = target > 0 ? clamp(current / target, 0, 1) : 0;
+  const direction = inferKrDirection(kr.title || '');
+  const { from, to } = parseFromToValues(kr.title || '');
+
+  let progressRatio = 0;
+  let gapToTarget = 0;
+
+  if (direction === 'maintain') {
+    const baseline = Number.isFinite(from) ? Number(from) : target;
+    const maintainTarget = Number.isFinite(to) ? Number(to) : target;
+    const span = Math.abs(baseline - maintainTarget);
+    if (span > 0) {
+      progressRatio = clamp(Math.abs(baseline - current) / span, 0, 1);
+    } else {
+      progressRatio = 0;
+    }
+    gapToTarget = Math.max(current - maintainTarget, 0);
+  } else if (direction === 'decrease') {
+    const baseline = Number.isFinite(from) ? Number(from) : Math.max(current, target);
+    const decreaseTarget = Number.isFinite(to) ? Number(to) : target;
+    const span = Math.max(baseline - decreaseTarget, 0);
+    progressRatio = span > 0 ? clamp((baseline - current) / span, 0, 1) : 0;
+    gapToTarget = Math.max(current - decreaseTarget, 0);
+  } else {
+    const baseline = Number.isFinite(from) ? Number(from) : 0;
+    const increaseTarget = Number.isFinite(to) ? Number(to) : target;
+    const span = Math.max(increaseTarget - baseline, 0);
+    progressRatio = span > 0 ? clamp((current - baseline) / span, 0, 1) : 0;
+    gapToTarget = Math.max(increaseTarget - current, 0);
+  }
+
   const progressPercent = Math.round(progressRatio * 100);
-  const gapToTarget = Math.max(target - current, 0);
 
   return {
     id: kr.id,

@@ -297,6 +297,26 @@ export async function listManagerDigest(teamId: string) {
       reasonCodes.push('low_progress_ratio');
     }
 
+    const riskScore =
+      (riskLevel === 'off_track' ? 70 : riskLevel === 'at_risk' ? 35 : 0)
+      + Math.min(staleDays, 14)
+      + (row.progress_delta != null && Number(row.progress_delta) < 0 ? 12 : 0)
+      + (row.confidence != null && Number(row.confidence) <= 2 ? 10 : 0)
+      + (blockers.length > 0 ? 8 : 0)
+      + (progressRatio < 0.35 ? 10 : 0);
+
+    const suggestedAction = reasonCodes.includes('stale_update')
+      ? 'Request fresh check-in by Friday'
+      : reasonCodes.includes('blockers_present')
+        ? 'Escalate blocker and assign owner'
+        : reasonCodes.includes('negative_progress_delta')
+          ? 'Run recovery plan this week'
+          : reasonCodes.includes('low_confidence')
+            ? 'Review confidence risks with owner'
+            : riskLevel === 'off_track'
+              ? 'Set corrective milestone this week'
+              : 'Keep monitoring this KR';
+
     return {
       keyResultId: Number(row.key_result_id),
       title: row.title,
@@ -309,7 +329,9 @@ export async function listManagerDigest(teamId: string) {
       lastCheckinAt: row.created_at,
       staleDays,
       riskLevel,
+      riskScore,
       reasonCodes,
+      suggestedAction,
       note: row.note ?? row.commentary ?? null
     };
   });
@@ -327,10 +349,7 @@ export async function listManagerDigest(teamId: string) {
     generatedAt: new Date().toISOString(),
     summary: counts,
     items: items
-      .sort((a, b) => {
-        const score = (risk: string) => (risk === 'off_track' ? 2 : risk === 'at_risk' ? 1 : 0);
-        return score(b.riskLevel) - score(a.riskLevel) || b.staleDays - a.staleDays;
-      })
+      .sort((a, b) => b.riskScore - a.riskScore || b.staleDays - a.staleDays)
       .slice(0, 12)
   };
 }

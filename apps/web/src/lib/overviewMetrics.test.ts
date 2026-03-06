@@ -63,3 +63,30 @@ test('buildOverviewMetrics handles empty and invalid targets', () => {
   assert.equal(invalidTarget.metricsByKr[0].progressPercent, 0);
   assert.equal(invalidTarget.metricsByKr[0].status, 'off-track');
 });
+
+test('buildOverviewMetrics does not mark reduction and maintain KRs as complete at baseline', () => {
+  const metrics = buildOverviewMetrics([
+    {
+      id: 1,
+      title: 'Reduce average software delivery lead time from 8 weeks to 3 weeks',
+      currentValue: 8,
+      targetValue: 3,
+      unit: 'weeks'
+    },
+    {
+      id: 2,
+      title: 'Maintain number of defects per release at or below 10',
+      currentValue: 10,
+      targetValue: 10,
+      unit: 'defects'
+    }
+  ]);
+
+  const reduction = metrics.metricsByKr.find((kr) => kr.id === 1);
+  const maintain = metrics.metricsByKr.find((kr) => kr.id === 2);
+
+  assert.equal(reduction?.progressPercent, 0);
+  assert.equal(maintain?.progressPercent, 0);
+  assert.notEqual(reduction?.progressPercent, 100);
+  assert.notEqual(maintain?.progressPercent, 100);
+});

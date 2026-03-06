@@ -54,7 +54,7 @@ test('manager overview renders baseline cards and digest', () => {
       managerDigest: {
         teamId: 'team_product',
         summary: { on_track: 2, at_risk: 1, off_track: 0 },
-        items: [{ keyResultId: 11, title: 'Reduce churn', objective: 'Improve retention', riskLevel: 'at_risk', staleDays: 2, note: null }]
+        items: [{ keyResultId: 11, title: 'Reduce churn', objective: 'Improve retention', riskLevel: 'at_risk', staleDays: 2, note: null, reasonCodes: ['negative_progress_delta'], riskScore: 47 }]
       },
       leaderRollup: null
     })
@@ -63,5 +63,9 @@ test('manager overview renders baseline cards and digest', () => {
   assert.match(html, /Overall progress/);
   assert.match(html, /KR status distribution/);
   assert.match(html, /Objectives/);
-  assert.match(html, /Manager digest/);
+  assert.match(html, /Manager action digest/);
+  assert.match(html, /Quality:/);
+  assert.match(html, /Next action:/);
+  assert.match(html, /risk 47/);
+  assert.match(html, /Nudge owner/);
 });

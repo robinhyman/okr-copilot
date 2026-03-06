@@ -1,5 +1,6 @@
 import { OverviewSummary } from './OverviewSummary';
 import { LeaderRollupSnapshot } from './LeaderRollupSnapshot';
+import { ManagerActionDigestSnapshot } from './ManagerActionDigestSnapshot';
 import type { OverviewMetrics } from '../lib/overviewMetrics';
 
 type ManagerDigestItem = {
@@ -9,11 +10,18 @@ type ManagerDigestItem = {
   riskLevel: 'on_track' | 'at_risk' | 'off_track';
   staleDays: number;
   note: string | null;
+  reasonCodes?: string[];
+  blockers?: string[];
+  confidence?: number | null;
+  progressDelta?: number | null;
+  riskScore?: number;
+  suggestedAction?: string;
 };
 
 type ManagerDigest = {
   teamId: string;
   summary: { on_track: number; at_risk: number; off_track: number };
+  generatedAt?: string;
   items: ManagerDigestItem[];
 };
 
@@ -34,26 +42,11 @@ export function OverviewDashboard({ role, metrics, managerDigest, leaderRollup }
     <section className="panel" data-testid="overview-dashboard">
       <h2>Overview</h2>
 
+      {role === 'manager' && managerDigest ? <ManagerActionDigestSnapshot digest={managerDigest} /> : null}
+
       {role === 'senior_leader' && leaderRollup ? <LeaderRollupSnapshot rollup={leaderRollup} /> : null}
 
       <OverviewSummary metrics={metrics} />
-
-      {role === 'manager' && managerDigest ? (
-        <section className="panel nested" data-testid="manager-digest-card">
-          <h3>Manager digest</h3>
-          <p className="muted">
-            On track {managerDigest.summary.on_track} · At risk {managerDigest.summary.at_risk} · Off track{' '}
-            {managerDigest.summary.off_track}
-          </p>
-          <ul className="history">
-            {managerDigest.items.slice(0, 5).map((item) => (
-              <li key={item.keyResultId} data-testid={`digest-item-${item.keyResultId}`}>
-                <strong>{item.title}</strong> <span className="muted">({item.objective})</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
     </section>
   );
 }

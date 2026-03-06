@@ -10,5 +10,9 @@ export function formatTurnStatus(metadata?: ChatTurnMetadata): string {
 }
 
 export function buildCreateFlowSeedMessage(teamId: string): string {
-  return `Help me create a measurable OKR for ${teamId}. Start by coaching me with your most important first question.`;
+  return `Help me create a measurable OKR for ${teamId}. Ask one short, high-impact clarifying question first.`;
+}
+
+export function buildDeterministicFirstCoachQuestion(teamId: string): string {
+  return `What is the most important business outcome ${teamId} must achieve this quarter, and why now?`;
 }

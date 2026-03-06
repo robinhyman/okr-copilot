@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getRoutePath, type RoutePath } from './lib/ui';
 import { deriveCoachUiState, publishButtonEnabled } from './lib/conversationFlow';
 import { buildGroupedOverviewMetrics } from './lib/overviewMetrics';
 import { OverviewDashboard } from './components/OverviewDashboard';
-import { buildCreateFlowSeedMessage, formatTurnStatus } from './lib/coachStatus';
+import { buildDeterministicFirstCoachQuestion, formatTurnStatus } from './lib/coachStatus';
 
 type ApiOkr = {
   id: number;
@@ -93,6 +93,12 @@ export function App() {
   const [coachPrompts, setCoachPrompts] = useState<string[]>([]);
   const [status, setStatus] = useState('');
   const [isCoachModalOpen, setIsCoachModalOpen] = useState(false);
+  const [isStartingCoachSession, setIsStartingCoachSession] = useState(false);
+  const [isCoachThinking, setIsCoachThinking] = useState(false);
+  const [coachThinkingSinceMs, setCoachThinkingSinceMs] = useState<number | null>(null);
+  const [firstCoachResponseMs, setFirstCoachResponseMs] = useState<number | null>(null);
+  const sessionStartRef = useRef<number | null>(null);
+  const modalOpenRef = useRef<number | null>(null);
 
   const persona = PERSONAS.find((x) => x.key === personaKey) ?? PERSONAS[0];
   const actorHeaders = { 'x-auth-user-id': persona.userId, 'x-auth-team-id': persona.teamId };
@@ -162,6 +168,12 @@ export function App() {
     setChatMessages([]);
     setCoachPrompts([]);
     setIsCoachModalOpen(false);
+    setIsStartingCoachSession(false);
+    setIsCoachThinking(false);
+    setCoachThinkingSinceMs(null);
+    setFirstCoachResponseMs(null);
+    sessionStartRef.current = null;
+    modalOpenRef.current = null;
   }, [personaKey]);
 
   function navigate(path: RoutePath) {
@@ -170,43 +182,54 @@ export function App() {
   }
 
   async function startDraftSession() {
-    const created = await jsonFetch('/api/okr-drafts/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: `${persona.teamId} coach draft` })
-    }, actorHeaders);
-    const sessionId = Number(created?.session?.id);
-    setActiveDraftId(sessionId);
-    setActiveDraft(null);
-
-    const starterMessages: ChatMessage[] = [{
-      role: 'user',
-      content: buildCreateFlowSeedMessage(persona.teamId)
-    }];
-
-    const response = await jsonFetch(`/api/okr-drafts/${sessionId}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: starterMessages, draft: null })
-    }, actorHeaders);
-
-    setActiveDraft(response.draft ?? null);
-    setCoachPrompts(Array.isArray(response.questions) ? response.questions : []);
-    setChatMessages([
-      {
-        role: 'assistant',
-        content: response.assistantMessage || 'Let’s shape the right OKR together.',
-        metadata: {
-          source: response.metadata?.source,
-          provider: response.metadata?.provider,
-          reason: response.metadata?.reason,
-          mode: response.mode
-        }
-      }
-    ]);
-    setStatus(`Coach session started · ${formatTurnStatus(response.metadata)}`.trim());
+    const now = performance.now();
+    sessionStartRef.current = now;
+    setFirstCoachResponseMs(null);
     setIsCoachModalOpen(true);
-    await loadDrafts();
+    modalOpenRef.current = performance.now();
+    setIsStartingCoachSession(true);
+    setIsCoachThinking(true);
+    setCoachThinkingSinceMs(Date.now());
+    setChatMessages([]);
+    setCoachPrompts([]);
+    setActiveDraft(null);
+    setStatus('Starting coach session…');
+
+    try {
+      const created = await jsonFetch('/api/okr-drafts/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: `${persona.teamId} coach draft` })
+      }, actorHeaders);
+      const sessionId = Number(created?.session?.id);
+      setActiveDraftId(sessionId);
+
+      setActiveDraft(null);
+      setCoachPrompts([]);
+      setChatMessages([
+        {
+          role: 'assistant',
+          content: buildDeterministicFirstCoachQuestion(persona.teamId),
+          metadata: {
+            source: 'fallback',
+            provider: 'deterministic',
+            reason: 'deterministic_first_turn',
+            mode: 'questions'
+          }
+        }
+      ]);
+
+      const firstResponse = sessionStartRef.current !== null ? Math.round(performance.now() - sessionStartRef.current) : null;
+      setFirstCoachResponseMs(firstResponse);
+      setStatus(`Coach session started · deterministic first turn${firstResponse !== null ? ` · first response ${firstResponse}ms` : ''}`.trim());
+      void loadDrafts();
+    } catch (error: any) {
+      setStatus(`Could not start coach session: ${error?.message ?? 'unknown error'}`);
+    } finally {
+      setIsStartingCoachSession(false);
+      setIsCoachThinking(false);
+      setCoachThinkingSinceMs(null);
+    }
   }
 
   async function resumeDraft(session: DraftSession) {
@@ -214,41 +237,55 @@ export function App() {
     setActiveDraft(session.current_draft ?? null);
     setChatMessages([{ role: 'assistant', content: `Resumed draft: ${session.title}. Tell me what to refine.` }]);
     setCoachPrompts([]);
+    setIsCoachThinking(false);
+    setIsStartingCoachSession(false);
     setIsCoachModalOpen(true);
   }
 
   async function sendChatTurn(prefilled?: string) {
-    if (!activeDraftId) return;
+    if (!activeDraftId || isCoachThinking) return;
     const text = (prefilled ?? chatInput).trim();
     if (!text) return;
     const next = [...chatMessages, { role: 'user' as const, content: text }];
     setChatMessages(next);
     setChatInput('');
+    setIsCoachThinking(true);
+    setCoachThinkingSinceMs(Date.now());
 
-    const response = await jsonFetch(`/api/okr-drafts/${activeDraftId}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: next, draft: activeDraft })
-    }, actorHeaders);
+    const turnStartedAt = performance.now();
 
-    setActiveDraft(response.draft);
-    setCoachPrompts(Array.isArray(response.questions) ? response.questions : []);
-    setChatMessages((prev) => [
-      ...prev,
-      {
-        role: 'assistant',
-        content: response.assistantMessage || 'Updated draft.',
-        metadata: {
-          source: response.metadata?.source,
-          provider: response.metadata?.provider,
-          reason: response.metadata?.reason,
-          mode: response.mode
+    try {
+      const response = await jsonFetch(`/api/okr-drafts/${activeDraftId}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: next, draft: activeDraft })
+      }, actorHeaders);
+
+      setActiveDraft(response.draft);
+      setCoachPrompts(Array.isArray(response.questions) ? response.questions : []);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: response.assistantMessage || 'Updated draft.',
+          metadata: {
+            source: response.metadata?.source,
+            provider: response.metadata?.provider,
+            reason: response.metadata?.reason,
+            mode: response.mode
+          }
         }
-      }
-    ]);
-    const sourceStatus = formatTurnStatus(response.metadata);
-    setStatus(`${response.mode === 'questions' ? 'Coach asked follow-up questions.' : 'Draft refined.'}${sourceStatus ? ` · ${sourceStatus}` : ''}`);
-    await loadDrafts();
+      ]);
+      const sourceStatus = formatTurnStatus(response.metadata);
+      const turnLatencyMs = Math.round(performance.now() - turnStartedAt);
+      setStatus(`${response.mode === 'questions' ? 'Coach asked follow-up questions.' : 'Draft refined.'}${sourceStatus ? ` · ${sourceStatus}` : ''} · response ${turnLatencyMs}ms`);
+      void loadDrafts();
+    } catch (error: any) {
+      setStatus(`Coach response failed: ${error?.message ?? 'unknown error'}`);
+    } finally {
+      setIsCoachThinking(false);
+      setCoachThinkingSinceMs(null);
+    }
   }
 
   async function saveDraft(statusToSave: 'saved' | 'ready' = 'saved') {
@@ -273,6 +310,10 @@ export function App() {
   }
 
   const selectedDraft = useMemo(() => drafts.find((d) => d.id === activeDraftId) ?? null, [drafts, activeDraftId]);
+  const modalOpenLatencyMs = sessionStartRef.current !== null && modalOpenRef.current !== null
+    ? Math.max(0, Math.round(modalOpenRef.current - sessionStartRef.current))
+    : null;
+  const thinkingElapsedSeconds = coachThinkingSinceMs ? Math.max(0, Math.floor((Date.now() - coachThinkingSinceMs) / 1000)) : null;
 
   return (
     <main className="app-shell">
@@ -301,9 +342,14 @@ export function App() {
           <section className="panel">
             <h2>Conversational OKR Coach</h2>
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              <button onClick={() => void startDraftSession()}>Create OKR with Coach</button>
+              <button disabled={isStartingCoachSession} onClick={() => void startDraftSession()}>
+                {isStartingCoachSession ? 'Starting coach…' : 'Create OKR with Coach'}
+              </button>
               <p className="muted">State: {coachUiState}</p>
               {!!status && <p className="muted">{status}</p>}
+              {(modalOpenLatencyMs !== null || firstCoachResponseMs !== null) && (
+                <p className="muted">Perf: modal {modalOpenLatencyMs ?? '-'}ms · first response {firstCoachResponseMs ?? '-'}ms</p>
+              )}
             </div>
 
             <div className="panel nested">
@@ -336,25 +382,41 @@ export function App() {
                             </li>
                           );
                         })}
+                        {(isStartingCoachSession || isCoachThinking) && (
+                          <li className="coach-thinking" aria-live="polite">
+                            <strong>Coach:</strong>
+                            <span className="typing-dots" aria-hidden="true">
+                              <span />
+                              <span />
+                              <span />
+                            </span>
+                            <span className="muted"> thinking{thinkingElapsedSeconds && thinkingElapsedSeconds > 4 ? ` (${thinkingElapsedSeconds}s)` : ''}</span>
+                          </li>
+                        )}
                       </ul>
                       <div className="row">
-                        <input value={chatInput} placeholder="Answer the coach..." onChange={(e) => setChatInput(e.target.value)} />
-                        <button onClick={() => void sendChatTurn()}>Send</button>
+                        <input
+                          value={chatInput}
+                          disabled={isCoachThinking || isStartingCoachSession}
+                          placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Answer the coach...'}
+                          onChange={(e) => setChatInput(e.target.value)}
+                        />
+                        <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
                       </div>
                     </div>
 
                     <div className="panel nested">
                       <h4>Prompt focus</h4>
-                      {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : <p className="muted">No missing-context prompts right now.</p>}
+                      {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : <p className="muted">{isStartingCoachSession ? 'Loading coach prompts…' : 'No missing-context prompts right now.'}</p>}
                       <div className="row">
-                        <button className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
-                        <button className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
+                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
+                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
                       </div>
                     </div>
 
                     <div className="panel nested">
                       <h4>Live draft preview</h4>
-                      {!activeDraft ? <p>Draft preview building…</p> : (
+                      {!activeDraft ? <p>{isStartingCoachSession ? 'Starting coach session…' : 'Draft preview building…'}</p> : (
                         <>
                           <p><strong>Objective:</strong> {activeDraft.objective}</p>
                           <p><strong>Timeframe:</strong> {activeDraft.timeframe}</p>
@@ -365,10 +427,10 @@ export function App() {
                   </div>
 
                   <div className="row">
-                    <button className="secondary" disabled={!activeDraft} onClick={() => void saveDraft('saved')}>Save draft</button>
+                    <button className="secondary" disabled={!activeDraft || isCoachThinking || isStartingCoachSession} onClick={() => void saveDraft('saved')}>Save draft</button>
                     <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
                     <button
-                      disabled={!publishButtonEnabled({ canPublish, hasDraft: Boolean(activeDraft), draftStatus: selectedDraft?.status })}
+                      disabled={isCoachThinking || isStartingCoachSession || !publishButtonEnabled({ canPublish, hasDraft: Boolean(activeDraft), draftStatus: selectedDraft?.status })}
                       onClick={() => void publishDraft()}
                     >
                       Publish when ready
