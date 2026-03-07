@@ -860,6 +860,31 @@ button.secondary {
   display: inline;
 }
 
+.checkins-table-wrap {
+  overflow-x: auto;
+  margin-top: 0.5rem;
+}
+
+.checkins-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.checkins-table th,
+.checkins-table td {
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid #e5e7eb;
+  vertical-align: top;
+}
+
+.checkins-table thead th {
+  font-weight: 600;
+  color: #374151;
+  background: #f9fafb;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;

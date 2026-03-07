@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type ManagerDigestItem = {
   keyResultId: number;
@@ -47,9 +47,19 @@ function suggestAction(item: ManagerDigestItem): string {
 }
 
 export function ManagerActionDigestSnapshot({ digest }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const storageKey = `manager-digest-collapsed:${digest.teamId}`;
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const saved = window.localStorage.getItem(storageKey);
+    return saved == null ? true : saved === 'true';
+  });
   const [expanded, setExpanded] = useState(false);
   const [actionStatus, setActionStatus] = useState('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(storageKey, String(collapsed));
+  }, [storageKey, collapsed]);
 
   const staleCount = digest.items.filter((item) => item.staleDays >= 8).length;
   const blockerCount = digest.items.filter((item) => (item.blockers ?? []).length > 0).length;
