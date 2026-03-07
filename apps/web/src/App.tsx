@@ -1,28 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  MAX_KEY_RESULTS_PER_OBJECTIVE,
-  MAX_OBJECTIVES,
-  getRoutePath,
-  validateObjectiveSet,
-  type RoutePath
-} from './lib/ui';
+import { getRoutePath, type RoutePath } from './lib/ui';
+import { deriveCoachUiState, publishButtonEnabled } from './lib/conversationFlow';
 import { buildGroupedOverviewMetrics } from './lib/overviewMetrics';
-import { OverviewSummary } from './components/OverviewSummary';
-
-type ObjectiveDraft = {
-  id?: number;
-  objective: string;
-  timeframe: string;
-  keyResults: Array<{ id?: number; title: string; targetValue: number; currentValue: number; unit: string }>;
-};
-
-type Draft = { objectives: ObjectiveDraft[] };
-
-type DraftMetadata = {
-  source: 'llm' | 'fallback';
-  provider: 'openai' | 'deterministic';
-  reason?: string;
-};
+import { OverviewDashboard } from './components/OverviewDashboard';
+import { buildDeterministicFirstCoachQuestion, formatTurnStatus } from './lib/coachStatus';
 
 type ApiOkr = {
   id: number;
@@ -31,33 +12,35 @@ type ApiOkr = {
   keyResults: Array<{ id: number; title: string; target_value: number; current_value: number; unit: string }>;
 };
 
-type KrCheckin = {
-  id: number;
-  key_result_id: number;
-  value: number;
-  commentary: string | null;
-  created_at: string;
-};
-
-type Feedback = { type: 'info' | 'success' | 'error'; text: string; scope: RoutePath; id: number };
-type ChatMessage = { role: 'user' | 'assistant'; content: string };
-
-type CoachingContext = {
-  outcome?: string;
-  baseline?: string;
-  constraints?: string;
-  timeframe?: string;
-};
-
-type ChatResponse = {
-  assistantMessage?: string;
+type ChatTurnMetadata = {
+  source?: 'llm' | 'fallback';
+  provider?: 'openai' | 'deterministic';
+  reason?: string;
   mode?: 'questions' | 'refine';
-  questions?: string[];
-  rationale?: string[];
-  coachingContext?: CoachingContext;
-  missingContext?: string[];
-  draft: ObjectiveDraft;
-  metadata?: DraftMetadata;
+};
+
+type ChatMessage = { role: 'user' | 'assistant'; content: string; metadata?: ChatTurnMetadata };
+type DraftPayload = { objective: string; timeframe: string; keyResults: Array<{ title: string; targetValue: number; currentValue: number; unit: string }> };
+type DraftSession = {
+  id: number;
+  team_id: string;
+  owner_user_id: string;
+  title: string;
+  status: 'discovery' | 'refining' | 'saved' | 'ready' | 'published';
+  version_count: number;
+  current_draft: DraftPayload | null;
+  updated_at: string;
+};
+
+type ManagerDigest = {
+  teamId: string;
+  summary: { on_track: number; at_risk: number; off_track: number };
+  items: Array<{ keyResultId: number; title: string; objective: string; riskLevel: 'on_track' | 'at_risk' | 'off_track'; staleDays: number; note: string | null }>;
+};
+
+type LeaderRollup = {
+  teams: Array<{ teamId: string; onTrack: number; atRisk: number; offTrack: number }>;
+  trend: Array<{ weekStart: string; onTrack: number; atRisk: number; offTrack: number }>;
 };
 
 const apiBase =
@@ -66,746 +49,401 @@ const apiBase =
     ? `${window.location.protocol}//${window.location.hostname}:4000`
     : 'http://localhost:4000');
 const stubToken = import.meta.env.VITE_AUTH_STUB_TOKEN ?? 'dev-stub-token';
-const chatStorageKey = 'okr-copilot.chat.v1';
 
-type PersistedChatState = {
-  okrId: number;
-  messages: ChatMessage[];
-};
-
-const NAV_ITEMS: Array<{ path: RoutePath; label: string }> = [
-  { path: '/overview', label: 'Overview' },
-  { path: '/okrs', label: 'OKRs' },
-  { path: '/checkins', label: 'Check-ins' }
+const PERSONAS = [
+  { key: 'manager-product', label: 'Manager · Product team', userId: 'mgr_product', teamId: 'team_product' },
+  { key: 'manager-sales', label: 'Manager · Sales team', userId: 'mgr_sales', teamId: 'team_sales' },
+  { key: 'manager-ops', label: 'Manager · Ops team', userId: 'mgr_ops', teamId: 'team_ops' },
+  { key: 'member-sales', label: 'Team member · Sales team', userId: 'member_sales', teamId: 'team_sales' },
+  { key: 'member-product', label: 'Team member · Product team', userId: 'member_product', teamId: 'team_product' },
+  { key: 'leader-exec-product', label: 'Senior leader · cross-team', userId: 'leader_exec', teamId: 'team_product' }
 ];
 
-async function jsonFetch(path: string, init?: RequestInit) {
-  const mergedHeaders: Record<string, string> = {
-    'x-auth-stub-token': stubToken,
-    ...(init?.headers ? (init.headers as Record<string, string>) : {})
-  };
-
+async function jsonFetch(path: string, init?: RequestInit, authHeaders?: Record<string, string>) {
   const res = await fetch(`${apiBase}${path}`, {
     ...init,
-    headers: mergedHeaders
+    headers: {
+      'x-auth-stub-token': stubToken,
+      ...(authHeaders ?? {}),
+      ...(init?.headers ? (init.headers as Record<string, string>) : {})
+    }
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error || `request_failed_${res.status}`);
   return data;
 }
 
+function personaRole(userId: string): 'manager' | 'team_member' | 'senior_leader' {
+  if (userId.startsWith('leader_')) return 'senior_leader';
+  if (userId.startsWith('mgr_')) return 'manager';
+  return 'team_member';
+}
+
 export function App() {
   const [route, setRoute] = useState<RoutePath>(() => getRoutePath(window.location.pathname));
+  const [personaKey, setPersonaKey] = useState(PERSONAS[0].key);
   const [okrs, setOkrs] = useState<ApiOkr[]>([]);
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [draftMetadata, setDraftMetadata] = useState<DraftMetadata | null>(null);
-  const [focusArea, setFocusArea] = useState('Client delivery');
-  const [timeframe, setTimeframe] = useState('Q2 2026');
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [checkins, setCheckins] = useState<Record<number, { value: string; commentary: string }>>({});
-  const [checkinHistory, setCheckinHistory] = useState<Record<number, KrCheckin[]>>({});
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [submittingKrIds, setSubmittingKrIds] = useState<Record<number, boolean>>({});
+  const [managerDigest, setManagerDigest] = useState<ManagerDigest | null>(null);
+  const [leaderRollup, setLeaderRollup] = useState<LeaderRollup | null>(null);
+  const [drafts, setDrafts] = useState<DraftSession[]>([]);
+  const [activeDraftId, setActiveDraftId] = useState<number | null>(null);
+  const [activeDraft, setActiveDraft] = useState<DraftPayload | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const [isChatting, setIsChatting] = useState(false);
-  const [chatScopeOkrId, setChatScopeOkrId] = useState<number | null>(null);
-  const [isCoachingSessionActive, setIsCoachingSessionActive] = useState(false);
-  const [isDraftReadyFromChat, setIsDraftReadyFromChat] = useState(false);
-  const [coachingContext, setCoachingContext] = useState<CoachingContext>({});
-  const [missingContext, setMissingContext] = useState<string[]>([]);
-  const feedbackTimerRef = useRef<number | null>(null);
-  const checkinInFlightRef = useRef<Set<number>>(new Set());
+  const [coachPrompts, setCoachPrompts] = useState<string[]>([]);
+  const [status, setStatus] = useState('');
+  const [isCoachModalOpen, setIsCoachModalOpen] = useState(false);
+  const [isStartingCoachSession, setIsStartingCoachSession] = useState(false);
+  const [isCoachThinking, setIsCoachThinking] = useState(false);
+  const [coachThinkingSinceMs, setCoachThinkingSinceMs] = useState<number | null>(null);
+  const [firstCoachResponseMs, setFirstCoachResponseMs] = useState<number | null>(null);
+  const sessionStartRef = useRef<number | null>(null);
+  const modalOpenRef = useRef<number | null>(null);
 
-  function clearFeedbackTimer() {
-    if (feedbackTimerRef.current != null) {
-      window.clearTimeout(feedbackTimerRef.current);
-      feedbackTimerRef.current = null;
-    }
-  }
+  const persona = PERSONAS.find((x) => x.key === personaKey) ?? PERSONAS[0];
+  const actorHeaders = { 'x-auth-user-id': persona.userId, 'x-auth-team-id': persona.teamId };
+  const role = personaRole(persona.userId);
 
-  function setScopedFeedback(type: Feedback['type'], text: string, scope: RoutePath) {
-    const nextId = Date.now() + Math.random();
-    setFeedback({ type, text, scope, id: nextId });
-    clearFeedbackTimer();
-    const ttlMs = type === 'error' ? 6000 : 3500;
-    feedbackTimerRef.current = window.setTimeout(() => {
-      setFeedback((current) => (current?.id === nextId ? null : current));
-      feedbackTimerRef.current = null;
-    }, ttlMs);
-  }
+  const canPublish = role === 'manager';
+  const coachUiState = deriveCoachUiState({
+    hasActiveDraft: Boolean(activeDraft),
+    draftStatus: drafts.find((d) => d.id === activeDraftId)?.status,
+    hasMessages: chatMessages.length > 0
+  });
 
-  const active = useMemo(() => {
-    if (draft) return draft;
-    if (!okrs.length) return null;
-    return {
-      objectives: okrs.slice(0, MAX_OBJECTIVES).map((okr) => ({
-        id: okr.id,
-        objective: okr.objective,
-        timeframe: okr.timeframe,
-        keyResults: okr.keyResults.slice(0, MAX_KEY_RESULTS_PER_OBJECTIVE).map((kr) => ({
-          id: kr.id,
-          title: kr.title,
-          targetValue: Number(kr.target_value),
-          currentValue: Number(kr.current_value),
-          unit: kr.unit
+  const overviewMetrics = useMemo(
+    () =>
+      buildGroupedOverviewMetrics(
+        okrs.map((okr) => ({
+          id: okr.id,
+          objective: okr.objective,
+          timeframe: okr.timeframe,
+          keyResults: okr.keyResults.map((kr) => ({
+            id: kr.id,
+            title: kr.title,
+            currentValue: Number(kr.current_value),
+            targetValue: Number(kr.target_value),
+            unit: kr.unit
+          }))
         }))
-      }))
-    };
-  }, [draft, okrs]);
+      ),
+    [okrs]
+  );
 
-  const validationErrors = useMemo(() => validateObjectiveSet(active), [active]);
-  const showDraftEditor = Boolean(active) && (!isCoachingSessionActive || isDraftReadyFromChat);
-  const editableDraft = showDraftEditor ? (active as Draft) : null;
-
-  const overviewStats = useMemo(() => {
-    const progress = buildGroupedOverviewMetrics(
-      okrs.map((okr) => ({
-        id: okr.id,
-        objective: okr.objective,
-        timeframe: okr.timeframe,
-        keyResults: okr.keyResults.map((kr) => ({
-          id: kr.id,
-          title: kr.title,
-          currentValue: Number(kr.current_value),
-          targetValue: Number(kr.target_value),
-          unit: kr.unit
-        }))
-      }))
-    );
-
-    const recent = Object.values(checkinHistory)
-      .flat()
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-
-    return {
-      objectiveCount: okrs.length,
-      onTrack: progress.statusDistribution['on-track'],
-      atRisk: progress.statusDistribution['needs-attention'] + progress.statusDistribution['off-track'],
-      lastCheckinAt: recent?.created_at ?? null,
-      progress
-    };
-  }, [okrs, checkinHistory]);
-
-  useEffect(() => {
-    const onPopState = () => setRoute(getRoutePath(window.location.pathname));
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, []);
-
-  useEffect(() => {
-    return () => clearFeedbackTimer();
-  }, []);
-
-  useEffect(() => {
-    // Only restore chat for persisted/saved OKRs; draft sessions are intentionally ephemeral.
-    if (draft) return;
-    const okrId = okrs[0]?.id;
-    if (!Number.isFinite(okrId)) return;
-
-    const shouldAttemptRestore = chatMessages.length === 0 || chatScopeOkrId !== okrId;
-    if (!shouldAttemptRestore) return;
-
-    try {
-      const raw = window.localStorage.getItem(chatStorageKey);
-      if (!raw) {
-        if (chatScopeOkrId !== okrId) setChatMessages([]);
-        setChatScopeOkrId(okrId);
-        return;
-      }
-
-      const parsed = JSON.parse(raw) as PersistedChatState;
-      if (!parsed || parsed.okrId !== okrId || !Array.isArray(parsed.messages)) {
-        if (chatScopeOkrId !== okrId) setChatMessages([]);
-        setChatScopeOkrId(okrId);
-        return;
-      }
-
-      const restored: ChatMessage[] = parsed.messages
-        .filter((message: any) => message && typeof message.content === 'string' && typeof message.role === 'string')
-        .map((message: any) => {
-          const role: ChatMessage['role'] = message.role === 'assistant' ? 'assistant' : 'user';
-          return { role, content: String(message.content) };
-        })
-        .slice(-20);
-
-      setChatMessages(restored);
-      setChatScopeOkrId(okrId);
-    } catch {
-      // ignore local restore issues
-    }
-  }, [draft, okrs, chatMessages.length, chatScopeOkrId]);
-
-  useEffect(() => {
-    // Scope persistence to a specific saved OKR id to avoid replaying stale chat on a different draft/context.
-    if (draft) return;
-    const okrId = okrs[0]?.id;
-    if (!Number.isFinite(okrId)) return;
-
-    try {
-      const payload: PersistedChatState = {
-        okrId,
-        messages: chatMessages.slice(-20)
-      };
-      window.localStorage.setItem(chatStorageKey, JSON.stringify(payload));
-    } catch {
-      // ignore local persistence issues
-    }
-  }, [chatMessages, draft, okrs]);
-
-  async function refreshOkrs(): Promise<ApiOkr[]> {
-    const response = await jsonFetch('/api/okrs');
-    const rows = response.okrs ?? [];
-    setOkrs(rows);
-    return rows;
+  async function loadOkrs() {
+    const response = await jsonFetch('/api/okrs', undefined, actorHeaders);
+    setOkrs(response.okrs ?? []);
   }
 
-  async function refreshCheckinHistory(rows: ApiOkr[]) {
-    const keyResults = rows.flatMap((row) => row.keyResults ?? []);
-    if (!keyResults.length) {
-      setCheckinHistory({});
+  async function loadDrafts() {
+    const response = await jsonFetch('/api/okr-drafts', undefined, actorHeaders);
+    setDrafts(response.drafts ?? []);
+  }
+
+  async function loadOverviewRoleData() {
+    if (role === 'manager') {
+      const response = await jsonFetch('/api/manager/digest', undefined, actorHeaders);
+      setManagerDigest(response.digest ?? null);
+      setLeaderRollup(null);
       return;
     }
 
-    const histories = await Promise.all(
-      keyResults.map(async (kr) => {
-        const response = await jsonFetch(`/api/key-results/${kr.id}/checkins?limit=5`);
-        return [kr.id, response.checkins ?? []] as const;
-      })
-    );
+    if (role === 'senior_leader') {
+      const response = await jsonFetch('/api/leader/rollup', undefined, actorHeaders);
+      setLeaderRollup(response.rollup ?? null);
+      setManagerDigest(null);
+      return;
+    }
 
-    setCheckinHistory(Object.fromEntries(histories));
+    setManagerDigest(null);
+    setLeaderRollup(null);
   }
 
   useEffect(() => {
-    (async () => {
-      try {
-        const rows = await refreshOkrs();
-        await refreshCheckinHistory(rows);
-      } catch (e: any) {
-        setScopedFeedback('error', String(e?.message || e), getRoutePath(window.location.pathname));
-      }
-    })();
-  }, []);
+    void loadOkrs();
+    void loadDrafts();
+    void loadOverviewRoleData();
+    setActiveDraftId(null);
+    setActiveDraft(null);
+    setChatMessages([]);
+    setCoachPrompts([]);
+    setIsCoachModalOpen(false);
+    setIsStartingCoachSession(false);
+    setIsCoachThinking(false);
+    setCoachThinkingSinceMs(null);
+    setFirstCoachResponseMs(null);
+    sessionStartRef.current = null;
+    modalOpenRef.current = null;
+  }, [personaKey]);
 
   function navigate(path: RoutePath) {
-    if (window.location.pathname !== path) {
-      window.history.pushState({}, '', path);
-    }
+    if (window.location.pathname !== path) window.history.pushState({}, '', path);
     setRoute(path);
   }
 
-  async function generateDraft() {
-    setIsGenerating(true);
+  async function startDraftSession() {
+    const now = performance.now();
+    sessionStartRef.current = now;
+    setFirstCoachResponseMs(null);
+    setIsCoachModalOpen(true);
+    modalOpenRef.current = performance.now();
+    setIsStartingCoachSession(true);
+    setIsCoachThinking(true);
+    setCoachThinkingSinceMs(Date.now());
+    setChatMessages([]);
+    setCoachPrompts([]);
+    setActiveDraft(null);
+    setStatus('Starting coach session…');
+
     try {
-      setDraft(null);
-      setDraftMetadata(null);
-      setIsCoachingSessionActive(true);
-      setIsDraftReadyFromChat(false);
-      setCoachingContext({});
-      setMissingContext(['outcome', 'baseline', 'constraints', 'timeframe']);
-      setChatScopeOkrId(null);
+      const created = await jsonFetch('/api/okr-drafts/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: `${persona.teamId} coach draft` })
+      }, actorHeaders);
+      const sessionId = Number(created?.session?.id);
+      setActiveDraftId(sessionId);
+
+      setActiveDraft(null);
+      setCoachPrompts([]);
       setChatMessages([
         {
           role: 'assistant',
-          content:
-            'Great — what would you like to craft an OKR for? Share context (outcome, constraints, current baseline, and timeframe), and I’ll coach you to a strong first draft.'
+          content: buildDeterministicFirstCoachQuestion(persona.teamId),
+          metadata: {
+            source: 'fallback',
+            provider: 'deterministic',
+            reason: 'deterministic_first_turn',
+            mode: 'questions'
+          }
         }
       ]);
-      setScopedFeedback('info', 'Coaching started. Tell me what you want to achieve.', '/okrs');
+
+      const firstResponse = sessionStartRef.current !== null ? Math.round(performance.now() - sessionStartRef.current) : null;
+      setFirstCoachResponseMs(firstResponse);
+      setStatus(`Coach session started · deterministic first turn${firstResponse !== null ? ` · first response ${firstResponse}ms` : ''}`.trim());
+      void loadDrafts();
+    } catch (error: any) {
+      setStatus(`Could not start coach session: ${error?.message ?? 'unknown error'}`);
     } finally {
-      setIsGenerating(false);
+      setIsStartingCoachSession(false);
+      setIsCoachThinking(false);
+      setCoachThinkingSinceMs(null);
     }
+  }
+
+  async function resumeDraft(session: DraftSession) {
+    setActiveDraftId(session.id);
+    setActiveDraft(session.current_draft ?? null);
+    setChatMessages([{ role: 'assistant', content: `Resumed draft: ${session.title}. Tell me what to refine.` }]);
+    setCoachPrompts([]);
+    setIsCoachThinking(false);
+    setIsStartingCoachSession(false);
+    setIsCoachModalOpen(true);
   }
 
   async function sendChatTurn(prefilled?: string) {
-    const trimmed = (prefilled ?? chatInput).trim();
-    if (!trimmed || isChatting) return;
-
-    if (!isCoachingSessionActive) {
-      setIsCoachingSessionActive(true);
-    }
-
-    const nextMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: trimmed }];
-    setChatMessages(nextMessages);
+    if (!activeDraftId || isCoachThinking) return;
+    const text = (prefilled ?? chatInput).trim();
+    if (!text) return;
+    const next = [...chatMessages, { role: 'user' as const, content: text }];
+    setChatMessages(next);
     setChatInput('');
-    setIsChatting(true);
-    setScopedFeedback('info', 'Refining draft...', '/okrs');
+    setIsCoachThinking(true);
+    setCoachThinkingSinceMs(Date.now());
+
+    const turnStartedAt = performance.now();
 
     try {
-      const response = (await jsonFetch('/api/okrs/chat', {
+      const response = await jsonFetch(`/api/okr-drafts/${activeDraftId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: nextMessages,
-          draft: active?.objectives?.[0] ?? undefined,
-          focusArea,
-          timeframe
-        })
-      })) as ChatResponse;
+        body: JSON.stringify({ messages: next, draft: activeDraft })
+      }, actorHeaders);
 
-      setCoachingContext(response.coachingContext ?? {});
-      setMissingContext(response.missingContext ?? []);
-
-      if (response.mode === 'refine') {
-        setDraft({ objectives: [response.draft] });
-        setDraftMetadata(response.metadata ?? null);
-        setIsDraftReadyFromChat(true);
-      }
-
-      const coachingBits: string[] = [];
-      if (response.mode === 'questions' && Array.isArray(response.questions) && response.questions.length) {
-        coachingBits.push(`Questions:\n${response.questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`);
-      }
-      if (Array.isArray(response.rationale) && response.rationale.length) {
-        coachingBits.push(`Why:\n${response.rationale.map((r) => `- ${r}`).join('\n')}`);
-      }
-
-      const assistantContent = [response.assistantMessage || 'Draft updated.', ...coachingBits].join('\n\n');
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: assistantContent }]);
-      setScopedFeedback(
-        'success',
-        response.mode === 'questions' ? 'Good context. A couple of questions before first draft.' : 'Draft ready/refined.',
-        '/okrs'
-      );
-    } catch (e: any) {
-      setScopedFeedback('error', `Refinement failed: ${String(e?.message || e)}`, '/okrs');
+      setActiveDraft(response.draft);
+      setCoachPrompts(Array.isArray(response.questions) ? response.questions : []);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: response.assistantMessage || 'Updated draft.',
+          metadata: {
+            source: response.metadata?.source,
+            provider: response.metadata?.provider,
+            reason: response.metadata?.reason,
+            mode: response.mode
+          }
+        }
+      ]);
+      const sourceStatus = formatTurnStatus(response.metadata);
+      const turnLatencyMs = Math.round(performance.now() - turnStartedAt);
+      setStatus(`${response.mode === 'questions' ? 'Coach asked follow-up questions.' : 'Draft refined.'}${sourceStatus ? ` · ${sourceStatus}` : ''} · response ${turnLatencyMs}ms`);
+      void loadDrafts();
+    } catch (error: any) {
+      setStatus(`Coach response failed: ${error?.message ?? 'unknown error'}`);
     } finally {
-      setIsChatting(false);
+      setIsCoachThinking(false);
+      setCoachThinkingSinceMs(null);
     }
   }
 
-  async function requestFirstDraftNow() {
-    if (isChatting) return;
-    await sendChatTurn('Generate the first draft now using the captured context.');
+  async function saveDraft(statusToSave: 'saved' | 'ready' = 'saved') {
+    if (!activeDraftId || !activeDraft) return;
+    await jsonFetch(`/api/okr-drafts/${activeDraftId}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draft: activeDraft, status: statusToSave, summary: 'Saved from review pane' })
+    }, actorHeaders);
+    setStatus(statusToSave === 'ready' ? 'Draft marked ready.' : 'Draft saved.');
+    await loadDrafts();
   }
 
-  async function saveOkr() {
-    if (!active) return;
-    if (validationErrors.length) {
-      setScopedFeedback('error', 'Please fix validation errors before saving.', '/okrs');
-      return;
-    }
-
-    setIsSaving(true);
-    setScopedFeedback('info', 'Saving...', '/okrs');
-
-    const payload = {
-      objectives: active.objectives.map((objective) => ({
-        objective: objective.objective,
-        timeframe: objective.timeframe,
-        keyResults: objective.keyResults
-      }))
-    };
-
-    try {
-      await jsonFetch('/api/okrs/bulk-upsert', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-auth-stub-token': stubToken
-        },
-        body: JSON.stringify(payload)
-      });
-
-      setDraft(null);
-      setDraftMetadata(null);
-      const rows = await refreshOkrs();
-      const persistedOkrId = rows[0]?.id;
-      if (Number.isFinite(persistedOkrId)) {
-        setChatScopeOkrId(persistedOkrId);
-      }
-      setIsCoachingSessionActive(false);
-      setIsDraftReadyFromChat(false);
-      setMissingContext([]);
-      await refreshCheckinHistory(rows);
-      setScopedFeedback('success', 'Objectives saved successfully.', '/okrs');
-    } catch (e: any) {
-      setScopedFeedback('error', `Save failed: ${String(e?.message || e)}`, '/okrs');
-    } finally {
-      setIsSaving(false);
-    }
+  async function publishDraft() {
+    if (!activeDraftId) return;
+    await jsonFetch(`/api/okr-drafts/${activeDraftId}/publish`, { method: 'POST' }, actorHeaders);
+    setStatus('Draft published to OKRs.');
+    setIsCoachModalOpen(false);
+    await loadOkrs();
+    await loadDrafts();
+    await loadOverviewRoleData();
   }
 
-  async function submitCheckin(krId: number) {
-    const current = checkins[krId];
-    if (!current || !current.value?.trim()) return;
-    if (checkinInFlightRef.current.has(krId)) return;
-
-    checkinInFlightRef.current.add(krId);
-    setSubmittingKrIds((prev) => ({ ...prev, [krId]: true }));
-    setScopedFeedback('info', `Submitting check-in for KR #${krId}...`, '/checkins');
-    try {
-      await jsonFetch(`/api/key-results/${krId}/checkins`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-auth-stub-token': stubToken
-        },
-        body: JSON.stringify({ value: Number(current.value), commentary: current.commentary })
-      });
-
-      setCheckins((prev) => ({ ...prev, [krId]: { value: '', commentary: '' } }));
-      const rows = await refreshOkrs();
-      await refreshCheckinHistory(rows);
-      setScopedFeedback('success', 'Check-in saved.', '/checkins');
-    } catch (e: any) {
-      setScopedFeedback('error', `Check-in failed: ${String(e?.message || e)}`, '/checkins');
-    } finally {
-      checkinInFlightRef.current.delete(krId);
-      setSubmittingKrIds((prev) => {
-        const next = { ...prev };
-        delete next[krId];
-        return next;
-      });
-    }
-  }
+  const selectedDraft = useMemo(() => drafts.find((d) => d.id === activeDraftId) ?? null, [drafts, activeDraftId]);
+  const modalOpenLatencyMs = sessionStartRef.current !== null && modalOpenRef.current !== null
+    ? Math.max(0, Math.round(modalOpenRef.current - sessionStartRef.current))
+    : null;
+  const thinkingElapsedSeconds = coachThinkingSinceMs ? Math.max(0, Math.floor((Date.now() - coachThinkingSinceMs) / 1000)) : null;
 
   return (
     <main className="app-shell">
       <aside className="sidebar panel">
         <h1>OKR Co-Pilot</h1>
-        <nav className="nav-list">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.path}
-              data-testid={`nav-${item.path.slice(1)}`}
-              className={`nav-item ${route === item.path ? 'active' : ''}`}
-              onClick={() => navigate(item.path)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
+        <button className={route === '/overview' ? 'active' : ''} onClick={() => navigate('/overview')}>Overview</button>
+        <button className={route === '/okrs' ? 'active' : ''} onClick={() => navigate('/okrs')}>OKRs</button>
+        <button className={route === '/checkins' ? 'active' : ''} onClick={() => navigate('/checkins')}>Check-ins</button>
+        <label>Demo persona</label>
+        <select value={personaKey} onChange={(e) => setPersonaKey(e.target.value)}>
+          {PERSONAS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
       </aside>
 
       <section className="main-content">
         {route === '/overview' && (
-          <section className="panel">
-            <h2>Overview</h2>
-            <OverviewSummary metrics={overviewStats.progress} />
-
-            <div className="stats-row">
-              <div className="stat-card">
-                <p>Active objectives</p>
-                <strong>{overviewStats.objectiveCount}</strong>
-              </div>
-              <div className="stat-card">
-                <p>On track KRs</p>
-                <strong>{overviewStats.onTrack}</strong>
-              </div>
-              <div className="stat-card">
-                <p>At risk KRs</p>
-                <strong>{overviewStats.atRisk}</strong>
-              </div>
-            </div>
-            <div className="row">
-              <button onClick={() => navigate('/okrs')}>Generate new draft</button>
-              <button className="secondary" onClick={() => navigate('/checkins')}>
-                Log check-in
-              </button>
-            </div>
-
-            {!!okrs.length ? (
-              <p className="muted" data-testid="overview-last-checkin">
-                Last check-in: {overviewStats.lastCheckinAt ? new Date(overviewStats.lastCheckinAt).toLocaleString() : 'No check-ins yet'}
-              </p>
-            ) : (
-              <p>No OKR yet. Head to OKRs to generate your first draft.</p>
-            )}
-          </section>
+          <OverviewDashboard
+            role={role}
+            metrics={overviewMetrics}
+            managerDigest={managerDigest}
+            leaderRollup={leaderRollup}
+          />
         )}
 
         {route === '/okrs' && (
           <section className="panel">
-            <h2>OKRs</h2>
-            <p className="muted">Generate, edit and save your active OKR set.</p>
-
-            <div className="panel nested">
-              <h3>Draft generator</h3>
-              <p className="muted">Start with a short coaching chat. Describe what you want to achieve, then we’ll shape the first draft together.</p>
-              <div className="row">
-                <button disabled={isGenerating} onClick={() => generateDraft()}>
-                  {isGenerating ? 'Starting...' : 'Generate draft'}
-                </button>
-              </div>
+            <h2>Conversational OKR Coach</h2>
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <button disabled={isStartingCoachSession} onClick={() => void startDraftSession()}>
+                {isStartingCoachSession ? 'Starting coach…' : 'Create OKR with Coach'}
+              </button>
+              <p className="muted">State: {coachUiState}</p>
+              {!!status && <p className="muted">{status}</p>}
+              {(modalOpenLatencyMs !== null || firstCoachResponseMs !== null) && (
+                <p className="muted">Perf: modal {modalOpenLatencyMs ?? '-'}ms · first response {firstCoachResponseMs ?? '-'}ms</p>
+              )}
             </div>
 
             <div className="panel nested">
-              <h3>Draft refinement chat</h3>
-              <div className="chat-thread">
-                {!chatMessages.length && (
-                  <p className="muted">Click “Generate draft” to start coaching. Begin by describing what you want to achieve.</p>
-                )}
-                {chatMessages.map((message, index) => (
-                  <div key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
-                    <strong>{message.role === 'user' ? 'You' : 'Co-pilot'}:</strong> {message.content}
-                  </div>
-                ))}
-              </div>
-              <div className="panel nested">
-                <h4>Captured context</h4>
-                <ul className="history">
-                  <li><strong>Outcome:</strong> {coachingContext.outcome || '—'}</li>
-                  <li><strong>Baseline:</strong> {coachingContext.baseline || '—'}</li>
-                  <li><strong>Constraints:</strong> {coachingContext.constraints || '—'}</li>
-                  <li><strong>Timeframe:</strong> {coachingContext.timeframe || '—'}</li>
-                </ul>
-                {!!missingContext.length && <p className="muted">Still needed: {missingContext.join(', ')}</p>}
-                <button disabled={isChatting || missingContext.length > 0} onClick={() => requestFirstDraftNow()}>
-                  Generate first draft now
+              <h3>Drafts</h3>
+              {drafts.map((draft) => (
+                <button key={draft.id} className="secondary" onClick={() => void resumeDraft(draft)}>
+                  {draft.title} · {draft.status} · v{draft.version_count}
                 </button>
-              </div>
-              <div className="row">
-                <textarea
-                  className="chat-input"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Describe what you want to achieve, constraints, baseline, and timeframe… (Ctrl/Cmd+Enter to send)"
-                  onKeyDown={(e) => {
-                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                      e.preventDefault();
-                      void sendChatTurn();
-                    }
-                  }}
-                />
-                <button disabled={isChatting || !chatInput.trim()} onClick={() => sendChatTurn()}>
-                  {isChatting ? 'Thinking...' : 'Send'}
-                </button>
-              </div>
+              ))}
             </div>
 
-            {showDraftEditor ? (
-              <>
-                {!!draftMetadata && (
-                  <p className="badge">Draft source: <strong>{draftMetadata.source}</strong></p>
-                )}
-
-                {editableDraft!.objectives.map((objective, objectiveIndex) => (
-                  <div className="panel nested" key={objective.id ?? objectiveIndex}>
-                    <h3>Objective {objectiveIndex + 1}</h3>
-                    <label>Objective</label>
-                    <textarea
-                      className="full-width-input objective-input"
-                      value={objective.objective}
-                      onChange={(e) => {
-                        const next = [...editableDraft!.objectives];
-                        next[objectiveIndex] = { ...objective, objective: e.target.value };
-                        setDraft({ objectives: next });
-                      }}
-                    />
-                    <label>Timeframe</label>
-                    <input
-                      className="full-width-input timeframe-input"
-                      value={objective.timeframe}
-                      onChange={(e) => {
-                        const next = [...editableDraft!.objectives];
-                        next[objectiveIndex] = { ...objective, timeframe: e.target.value };
-                        setDraft({ objectives: next });
-                      }}
-                    />
-
-                    <h4>Key Results</h4>
-                    {objective.keyResults.map((kr, index) => (
-                      <div className="kr" key={kr.id ?? index}>
-                        <input
-                          className="kr-title-input"
-                          value={kr.title}
-                          onChange={(e) => {
-                            const nextObjectives = [...editableDraft!.objectives];
-                            const nextKrs = [...objective.keyResults];
-                            nextKrs[index] = { ...kr, title: e.target.value };
-                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
-                            setDraft({ objectives: nextObjectives });
-                          }}
-                        />
-                        <input
-                          type="number"
-                          value={kr.currentValue}
-                          onChange={(e) => {
-                            const nextObjectives = [...editableDraft!.objectives];
-                            const nextKrs = [...objective.keyResults];
-                            nextKrs[index] = { ...kr, currentValue: Number(e.target.value || 0) };
-                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
-                            setDraft({ objectives: nextObjectives });
-                          }}
-                        />
-                        <span>/</span>
-                        <input
-                          type="number"
-                          value={kr.targetValue}
-                          onChange={(e) => {
-                            const nextObjectives = [...editableDraft!.objectives];
-                            const nextKrs = [...objective.keyResults];
-                            nextKrs[index] = { ...kr, targetValue: Number(e.target.value || 0) };
-                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
-                            setDraft({ objectives: nextObjectives });
-                          }}
-                        />
-                        <input
-                          value={kr.unit}
-                          onChange={(e) => {
-                            const nextObjectives = [...editableDraft!.objectives];
-                            const nextKrs = [...objective.keyResults];
-                            nextKrs[index] = { ...kr, unit: e.target.value };
-                            nextObjectives[objectiveIndex] = { ...objective, keyResults: nextKrs };
-                            setDraft({ objectives: nextObjectives });
-                          }}
-                        />
-                        <button
-                          className="secondary"
-                          disabled={objective.keyResults.length <= 1}
-                          onClick={() => {
-                            const nextObjectives = [...editableDraft!.objectives];
-                            nextObjectives[objectiveIndex] = {
-                              ...objective,
-                              keyResults: objective.keyResults.filter((_, i) => i !== index)
-                            };
-                            setDraft({ objectives: nextObjectives });
-                          }}
-                        >
-                          Remove KR
-                        </button>
-                      </div>
-                    ))}
-                    <div className="row">
-                      <button
-                        className="secondary"
-                        disabled={objective.keyResults.length >= MAX_KEY_RESULTS_PER_OBJECTIVE}
-                        onClick={() => {
-                          const nextObjectives = [...editableDraft!.objectives];
-                          nextObjectives[objectiveIndex] = {
-                            ...objective,
-                            keyResults: [
-                              ...objective.keyResults,
-                              { title: '', currentValue: 0, targetValue: 1, unit: 'points' }
-                            ]
-                          };
-                          setDraft({ objectives: nextObjectives });
-                        }}
-                      >
-                        Add KR
-                      </button>
-                      <button
-                        className="secondary"
-                        disabled={editableDraft!.objectives.length <= 1}
-                        onClick={() => {
-                          setDraft({ objectives: editableDraft!.objectives.filter((_, i) => i !== objectiveIndex) });
-                        }}
-                      >
-                        Remove objective
-                      </button>
-                    </div>
+            {isCoachModalOpen && (
+              <div className="coach-modal-backdrop" role="presentation">
+                <section className="coach-modal" role="dialog" aria-label="OKR coach dialog" aria-modal="true">
+                  <div className="coach-modal-header row" style={{ justifyContent: 'space-between' }}>
+                    <h3>Create OKR with Coach</h3>
+                    <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
                   </div>
-                ))}
 
-                <button
-                  className="secondary"
-                  disabled={editableDraft!.objectives.length >= MAX_OBJECTIVES}
-                  onClick={() =>
-                    setDraft({
-                      objectives: [
-                        ...editableDraft!.objectives,
-                        {
-                          objective: '',
-                          timeframe: timeframe,
-                          keyResults: [{ title: '', currentValue: 0, targetValue: 1, unit: 'points' }]
-                        }
-                      ]
-                    })
-                  }
-                >
-                  Add objective
-                </button>
-
-                {!!validationErrors.length && (
-                  <ul className="validation-list">{validationErrors.map((err) => <li key={err}>{err}</li>)}</ul>
-                )}
-
-                <div className="sticky-actions">
-                  <button disabled={isSaving} onClick={() => saveOkr()}>{isSaving ? 'Saving...' : 'Save objectives'}</button>
-                </div>
-              </>
-            ) : (
-              <p>
-                {isCoachingSessionActive
-                  ? 'We’re in coaching mode — answer the questions in chat and your first draft will appear here.'
-                  : 'No draft or saved OKR found yet. Generate a draft to get started.'}
-              </p>
-            )}
-          </section>
-        )}
-
-        {route === '/checkins' && (
-          <section className="panel">
-            <h2>Check-ins</h2>
-            {!!okrs.length ? (
-              okrs.map((okr) => (
-                <div key={okr.id} className="panel nested">
-                  <h3>{okr.objective}</h3>
-                  {okr.keyResults.map((kr) => (
-                    <div key={kr.id} className="checkin" data-testid={`checkin-row-${kr.id}`}>
-                      <div>
-                        <strong>{kr.title}</strong> ({kr.current_value}/{kr.target_value} {kr.unit})
-                      </div>
-                      <div className="row">                     <input
-                      type="number"
-                      placeholder="New value"
-                      data-testid={`checkin-value-${kr.id}`}
-                      value={checkins[kr.id]?.value ?? ''}
-                      onChange={(e) =>
-                        setCheckins((prev) => ({
-                          ...prev,
-                          [kr.id]: { value: e.target.value, commentary: prev[kr.id]?.commentary ?? '' }
-                        }))
-                      }
-                    />
-                    <input
-                      placeholder="Commentary"
-                      data-testid={`checkin-commentary-${kr.id}`}
-                      value={checkins[kr.id]?.commentary ?? ''}
-                      onChange={(e) =>
-                        setCheckins((prev) => ({
-                          ...prev,
-                          [kr.id]: { value: prev[kr.id]?.value ?? '', commentary: e.target.value }
-                        }))
-                      }
-                    />
-                    <button
-                      data-testid={`submit-checkin-${kr.id}`}
-                      disabled={Boolean(submittingKrIds[kr.id])}
-                      onClick={() => submitCheckin(kr.id)}
-                    >
-                      {submittingKrIds[kr.id] ? 'Submitting...' : 'Submit check-in'}
-                    </button> </div>
-                      <ul className="history" data-testid={`checkin-history-${kr.id}`}>
-                        {(checkinHistory[kr.id] ?? []).map((entry) => (
-                          <li key={entry.id}>
-                            <strong>{entry.value}</strong> — {entry.commentary || 'No commentary'}
-                            <span> ({new Date(entry.created_at).toLocaleString()})</span>
+                  <div className="coach-modal-grid">
+                    <div className="panel nested">
+                      <h4>Conversation</h4>
+                      <ul className="history">
+                        {chatMessages.map((m, idx) => {
+                          const turnStatus = formatTurnStatus(m.metadata);
+                          return (
+                            <li key={idx}>
+                              <strong>{m.role === 'assistant' ? 'Coach' : 'You'}:</strong> {m.content}
+                              {turnStatus ? <div className="muted">{turnStatus}</div> : null}
+                            </li>
+                          );
+                        })}
+                        {(isStartingCoachSession || isCoachThinking) && (
+                          <li className="coach-thinking" aria-live="polite">
+                            <strong>Coach:</strong>
+                            <span className="typing-dots" aria-hidden="true">
+                              <span />
+                              <span />
+                              <span />
+                            </span>
+                            <span className="muted"> thinking{thinkingElapsedSeconds && thinkingElapsedSeconds > 4 ? ` (${thinkingElapsedSeconds}s)` : ''}</span>
                           </li>
-                        ))}
-                        {!checkinHistory[kr.id]?.length && <li>No check-in history yet.</li>}
+                        )}
                       </ul>
+                      <div className="row">
+                        <input
+                          value={chatInput}
+                          disabled={isCoachThinking || isStartingCoachSession}
+                          placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Answer the coach...'}
+                          onChange={(e) => setChatInput(e.target.value)}
+                        />
+                        <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              ))
-            ) : (
-              <p>No key results available yet. Save an OKR first.</p>
+
+                    <div className="panel nested">
+                      <h4>Prompt focus</h4>
+                      {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : <p className="muted">{isStartingCoachSession ? 'Loading coach prompts…' : 'No missing-context prompts right now.'}</p>}
+                      <div className="row">
+                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
+                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
+                      </div>
+                    </div>
+
+                    <div className="panel nested">
+                      <h4>Live draft preview</h4>
+                      {!activeDraft ? <p>{isStartingCoachSession ? 'Starting coach session…' : 'Draft preview building…'}</p> : (
+                        <>
+                          <p><strong>Objective:</strong> {activeDraft.objective}</p>
+                          <p><strong>Timeframe:</strong> {activeDraft.timeframe}</p>
+                          <ul>{activeDraft.keyResults.map((kr, i) => <li key={i}>{kr.title} ({kr.currentValue} → {kr.targetValue} {kr.unit})</li>)}</ul>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="row">
+                    <button className="secondary" disabled={!activeDraft || isCoachThinking || isStartingCoachSession} onClick={() => void saveDraft('saved')}>Save draft</button>
+                    <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
+                    <button
+                      disabled={isCoachThinking || isStartingCoachSession || !publishButtonEnabled({ canPublish, hasDraft: Boolean(activeDraft), draftStatus: selectedDraft?.status })}
+                      onClick={() => void publishDraft()}
+                    >
+                      Publish when ready
+                    </button>
+                  </div>
+                </section>
+              </div>
             )}
           </section>
         )}
 
-
-        {!!feedback && feedback.scope === route && (
-          <p data-testid={`route-feedback-${route.slice(1)}`} className={`status ${feedback.type}`}>
-            {feedback.text}
-          </p>
-        )}
+        {route === '/checkins' && <section className="panel"><h2>Check-ins</h2><p>Published objectives and KRs are available after draft publish.</p></section>}
       </section>
     </main>
   );
 }
-

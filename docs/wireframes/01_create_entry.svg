@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <rect width="1400" height="900" fill="#f6f7fb"/>
+  <rect x="40" y="40" width="1320" height="820" rx="16" fill="#ffffff" stroke="#d9dce8"/>
+  <text x="90" y="110" font-family="Arial" font-size="34" font-weight="700" fill="#1f2937">OKR Co-Pilot</text>
+  <rect x="90" y="150" width="1220" height="120" rx="12" fill="#f8fafc" stroke="#cfd8ea"/>
+  <text x="120" y="200" font-family="Arial" font-size="28" font-weight="700" fill="#111827">Create a new OKR draft</text>
+  <text x="120" y="235" font-family="Arial" font-size="20" fill="#374151">Start a guided conversation with your OKR Coach.</text>
+
+  <rect x="90" y="320" width="840" height="460" rx="12" fill="#ffffff" stroke="#d7dbe8"/>
+  <text x="120" y="365" font-family="Arial" font-size="24" font-weight="700" fill="#111827">Recent drafts</text>
+  <rect x="120" y="390" width="780" height="95" rx="8" fill="#f9fafb" stroke="#e5e7eb"/>
+  <text x="145" y="440" font-family="Arial" font-size="18" fill="#111827">Enterprise onboarding expansion · Draft · Updated 2h ago</text>
+  <rect x="120" y="505" width="780" height="95" rx="8" fill="#f9fafb" stroke="#e5e7eb"/>
+  <text x="145" y="555" font-family="Arial" font-size="18" fill="#111827">Improve support resolution speed · Draft · Updated yesterday</text>
+
+  <rect x="980" y="320" width="330" height="460" rx="12" fill="#f8fafc" stroke="#d6deef"/>
+  <text x="1010" y="365" font-family="Arial" font-size="22" font-weight="700" fill="#111827">Coach modes</text>
+  <text x="1010" y="405" font-family="Arial" font-size="18" fill="#374151">• New OKR draft</text>
+  <text x="1010" y="437" font-family="Arial" font-size="18" fill="#374151">• Refine existing draft</text>
+  <text x="1010" y="469" font-family="Arial" font-size="18" fill="#374151">• Publish readiness check</text>
+
+  <rect x="980" y="700" width="330" height="64" rx="10" fill="#2563eb"/>
+  <text x="1048" y="740" font-family="Arial" font-size="24" font-weight="700" fill="#ffffff">Create with Coach</text>
+</svg>
