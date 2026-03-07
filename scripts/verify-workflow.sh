@@ -16,4 +16,7 @@ npm run test
 echo "==> verify-workflow: release evidence gate"
 npm run release:checklist
 
-echo "✅ verify-workflow passed"
+echo "==> verify-workflow: reseed demo data (must never leave app empty)"
+npm run seed:demo
+
+echo "✅ verify-workflow passed (with demo data reseeded)"
