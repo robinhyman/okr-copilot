@@ -551,24 +551,36 @@ export function App() {
             {!teamCheckins.length ? (
               <p className="muted">No check-ins in this window yet.</p>
             ) : (
-              <ul className="history">
-                {teamCheckins.map((checkin) => (
-                  <li key={checkin.id} data-testid={`checkin-${checkin.id}`}>
-                    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                      <strong>{checkin.key_result_title}</strong>
-                      <span className="badge">{new Date(checkin.created_at).toLocaleString()}</span>
-                    </div>
-                    <div className="muted">{checkin.objective} · {checkin.team_id}</div>
-                    <div className="row" style={{ marginTop: '0.2rem' }}>
-                      <span className="badge">Value {checkin.value} {checkin.key_result_unit}</span>
-                      {checkin.progress_delta != null ? <span className="badge">Δ {checkin.progress_delta}</span> : null}
-                      {checkin.confidence != null ? <span className="badge">Confidence {checkin.confidence}/5</span> : null}
-                    </div>
-                    {checkin.note ? <p className="muted" style={{ marginTop: '0.2rem' }}>{checkin.note}</p> : null}
-                    <p className="muted">By {checkin.created_by_user_id}</p>
-                  </li>
-                ))}
-              </ul>
+              <div className="checkins-table-wrap">
+                <table className="checkins-table" data-testid="checkins-table">
+                  <thead>
+                    <tr>
+                      <th>Key result name</th>
+                      <th>Change from</th>
+                      <th>Change to</th>
+                      <th>Checked in by</th>
+                      <th>Check-in timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamCheckins.map((checkin) => {
+                      const changeFrom = checkin.progress_delta == null ? null : checkin.value - checkin.progress_delta;
+                      return (
+                        <tr key={checkin.id} data-testid={`checkin-${checkin.id}`}>
+                          <td>
+                            <strong>{checkin.key_result_title}</strong>
+                            <div className="muted">{checkin.objective}</div>
+                          </td>
+                          <td>{changeFrom == null ? '—' : `${changeFrom} ${checkin.key_result_unit}`}</td>
+                          <td>{checkin.value} {checkin.key_result_unit}</td>
+                          <td>{checkin.created_by_user_id}</td>
+                          <td>{new Date(checkin.created_at).toLocaleString()}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
         )}

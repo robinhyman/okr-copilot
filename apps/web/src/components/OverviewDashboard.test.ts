@@ -65,8 +65,7 @@ test('manager overview renders baseline cards and digest', () => {
   assert.match(html, /Objectives/);
   assert.match(html, /Manager action digest/);
   assert.match(html, /Quality:/);
-  assert.match(html, /Next action:/);
-  assert.match(html, /risk 47/);
-  assert.match(html, /Hide details/);
-  assert.match(html, /Nudge owner/);
+  assert.match(html, /Show details/);
+  assert.doesNotMatch(html, /Next action:/);
+  assert.doesNotMatch(html, /Nudge owner/);
 });
