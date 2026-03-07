@@ -206,6 +206,32 @@ export async function listKrCheckins(keyResultId: number, teamIds: string[], lim
   }));
 }
 
+export async function listTeamCheckins(teamIds: string[], limit = 100) {
+  if (!teamIds.length) return [];
+  const safeLimit = Math.max(1, Math.min(limit, 200));
+  const res = await pool.query(
+    `SELECT c.id, c.key_result_id, c.value, c.commentary, c.note, c.progress_delta, c.confidence, c.blocker_tags, c.source, c.created_by_user_id, c.created_at,
+            kr.title AS key_result_title,
+            kr.unit AS key_result_unit,
+            o.objective,
+            o.team_id
+     FROM kr_checkins c
+     JOIN key_results kr ON kr.id = c.key_result_id
+     JOIN okrs o ON o.id = kr.okr_id
+     WHERE o.team_id = ANY($1::text[])
+     ORDER BY c.created_at DESC, c.id DESC
+     LIMIT $2`,
+    [teamIds, safeLimit]
+  );
+
+  return res.rows.map((row) => ({
+    ...row,
+    value: Number(row.value),
+    progress_delta: row.progress_delta == null ? null : Number(row.progress_delta),
+    blocker_tags: Array.isArray(row.blocker_tags) ? row.blocker_tags : []
+  }));
+}
+
 export async function addKrCheckin(input: StructuredCheckinInput) {
   const client = await pool.connect();
   try {
@@ -470,6 +496,35 @@ export async function appendDraftVersion(input: {
 
     await client.query('COMMIT');
     return inserted.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteDraftSession(input: { sessionId: number; teamId: string; actorUserId: string }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const sessionRes = await client.query(
+      `SELECT id FROM okr_draft_sessions WHERE id = $1 AND team_id = $2 LIMIT 1`,
+      [input.sessionId, input.teamId]
+    );
+
+    if (!sessionRes.rowCount) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    await client.query(`DELETE FROM okr_draft_audit_events WHERE draft_session_id = $1`, [input.sessionId]);
+    await client.query(`DELETE FROM okr_draft_versions WHERE draft_session_id = $1`, [input.sessionId]);
+    await client.query(`DELETE FROM okr_draft_sessions WHERE id = $1`, [input.sessionId]);
+
+    await client.query('COMMIT');
+    return true;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

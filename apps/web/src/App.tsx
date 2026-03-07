@@ -43,6 +43,21 @@ type LeaderRollup = {
   trend: Array<{ weekStart: string; onTrack: number; atRisk: number; offTrack: number }>;
 };
 
+type TeamCheckin = {
+  id: number;
+  key_result_id: number;
+  key_result_title: string;
+  key_result_unit: string;
+  objective: string;
+  team_id: string;
+  value: number;
+  progress_delta: number | null;
+  confidence: number | null;
+  note: string | null;
+  created_by_user_id: string;
+  created_at: string;
+};
+
 const apiBase =
   import.meta.env.VITE_API_BASE_URL ||
   (typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname)
@@ -85,6 +100,8 @@ export function App() {
   const [okrs, setOkrs] = useState<ApiOkr[]>([]);
   const [managerDigest, setManagerDigest] = useState<ManagerDigest | null>(null);
   const [leaderRollup, setLeaderRollup] = useState<LeaderRollup | null>(null);
+  const [teamCheckins, setTeamCheckins] = useState<TeamCheckin[]>([]);
+  const [checkinDaysFilter, setCheckinDaysFilter] = useState<7 | 30 | 90>(30);
   const [drafts, setDrafts] = useState<DraftSession[]>([]);
   const [activeDraftId, setActiveDraftId] = useState<number | null>(null);
   const [activeDraft, setActiveDraft] = useState<DraftPayload | null>(null);
@@ -97,6 +114,11 @@ export function App() {
   const [isCoachThinking, setIsCoachThinking] = useState(false);
   const [coachThinkingSinceMs, setCoachThinkingSinceMs] = useState<number | null>(null);
   const [firstCoachResponseMs, setFirstCoachResponseMs] = useState<number | null>(null);
+  const [isKrCheckinModalOpen, setIsKrCheckinModalOpen] = useState(false);
+  const [checkinKr, setCheckinKr] = useState<{ krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string } | null>(null);
+  const [checkinValue, setCheckinValue] = useState('');
+  const [checkinNote, setCheckinNote] = useState('');
+  const [checkinStatus, setCheckinStatus] = useState('');
   const sessionStartRef = useRef<number | null>(null);
   const modalOpenRef = useRef<number | null>(null);
 
@@ -140,6 +162,11 @@ export function App() {
     setDrafts(response.drafts ?? []);
   }
 
+  async function loadTeamCheckins(days: number = checkinDaysFilter) {
+    const response = await jsonFetch(`/api/checkins?limit=120&days=${days}`, undefined, actorHeaders);
+    setTeamCheckins(response.checkins ?? []);
+  }
+
   async function loadOverviewRoleData() {
     if (role === 'manager') {
       const response = await jsonFetch('/api/manager/digest', undefined, actorHeaders);
@@ -163,6 +190,7 @@ export function App() {
     void loadOkrs();
     void loadDrafts();
     void loadOverviewRoleData();
+    void loadTeamCheckins(checkinDaysFilter);
     setActiveDraftId(null);
     setActiveDraft(null);
     setChatMessages([]);
@@ -172,6 +200,11 @@ export function App() {
     setIsCoachThinking(false);
     setCoachThinkingSinceMs(null);
     setFirstCoachResponseMs(null);
+    setIsKrCheckinModalOpen(false);
+    setCheckinKr(null);
+    setCheckinValue('');
+    setCheckinNote('');
+    setCheckinStatus('');
     sessionStartRef.current = null;
     modalOpenRef.current = null;
   }, [personaKey]);
@@ -299,6 +332,21 @@ export function App() {
     await loadDrafts();
   }
 
+  async function deleteDraft(sessionId: number) {
+    const confirmed = window.confirm('Delete this draft? This cannot be undone.');
+    if (!confirmed) return;
+    await jsonFetch(`/api/okr-drafts/${sessionId}`, { method: 'DELETE' }, actorHeaders);
+    if (activeDraftId === sessionId) {
+      setActiveDraftId(null);
+      setActiveDraft(null);
+      setChatMessages([]);
+      setCoachPrompts([]);
+      setIsCoachModalOpen(false);
+    }
+    setStatus('Draft deleted.');
+    await loadDrafts();
+  }
+
   async function publishDraft() {
     if (!activeDraftId) return;
     await jsonFetch(`/api/okr-drafts/${activeDraftId}/publish`, { method: 'POST' }, actorHeaders);
@@ -307,6 +355,38 @@ export function App() {
     await loadOkrs();
     await loadDrafts();
     await loadOverviewRoleData();
+  }
+
+  function openKrCheckinModal(input: { krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string }) {
+    setCheckinKr(input);
+    setCheckinValue(String(input.currentValue));
+    setCheckinNote('');
+    setCheckinStatus('');
+    setIsKrCheckinModalOpen(true);
+  }
+
+  async function submitKrCheckin() {
+    if (!checkinKr) return;
+    const numericValue = Number(checkinValue);
+    if (!Number.isFinite(numericValue)) {
+      setCheckinStatus('Please enter a valid numeric value.');
+      return;
+    }
+
+    try {
+      await jsonFetch(`/api/key-results/${checkinKr.krId}/checkins`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: numericValue, note: checkinNote || undefined })
+      }, actorHeaders);
+      setCheckinStatus('Check-in saved.');
+      setIsKrCheckinModalOpen(false);
+      await loadOkrs();
+      await loadOverviewRoleData();
+      await loadTeamCheckins(checkinDaysFilter);
+    } catch (error: any) {
+      setCheckinStatus(`Could not save check-in: ${error?.message ?? 'unknown error'}`);
+    }
   }
 
   const selectedDraft = useMemo(() => drafts.find((d) => d.id === activeDraftId) ?? null, [drafts, activeDraftId]);
@@ -335,6 +415,7 @@ export function App() {
             metrics={overviewMetrics}
             managerDigest={managerDigest}
             leaderRollup={leaderRollup}
+            onRequestKrCheckin={openKrCheckinModal}
           />
         )}
 
@@ -355,9 +436,12 @@ export function App() {
             <div className="panel nested">
               <h3>Drafts</h3>
               {drafts.map((draft) => (
-                <button key={draft.id} className="secondary" onClick={() => void resumeDraft(draft)}>
-                  {draft.title} · {draft.status} · v{draft.version_count}
-                </button>
+                <div key={draft.id} className="row" style={{ justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                  <button className="secondary" onClick={() => void resumeDraft(draft)}>
+                    {draft.title} · {draft.status} · v{draft.version_count}
+                  </button>
+                  <button className="secondary" onClick={() => void deleteDraft(draft.id)}>Delete</button>
+                </div>
               ))}
             </div>
 
@@ -442,7 +526,87 @@ export function App() {
           </section>
         )}
 
-        {route === '/checkins' && <section className="panel"><h2>Check-ins</h2><p>Published objectives and KRs are available after draft publish.</p></section>}
+        {route === '/checkins' && (
+          <section className="panel" data-testid="checkins-screen">
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>Check-ins</h2>
+              <div className="row">
+                <label htmlFor="checkin-days" className="muted">Window</label>
+                <select
+                  id="checkin-days"
+                  value={checkinDaysFilter}
+                  onChange={(e) => {
+                    const days = Number(e.target.value) as 7 | 30 | 90;
+                    setCheckinDaysFilter(days);
+                    void loadTeamCheckins(days);
+                  }}
+                >
+                  <option value={7}>7 days</option>
+                  <option value={30}>30 days</option>
+                  <option value={90}>90 days</option>
+                </select>
+              </div>
+            </div>
+
+            {!teamCheckins.length ? (
+              <p className="muted">No check-ins in this window yet.</p>
+            ) : (
+              <ul className="history">
+                {teamCheckins.map((checkin) => (
+                  <li key={checkin.id} data-testid={`checkin-${checkin.id}`}>
+                    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                      <strong>{checkin.key_result_title}</strong>
+                      <span className="badge">{new Date(checkin.created_at).toLocaleString()}</span>
+                    </div>
+                    <div className="muted">{checkin.objective} · {checkin.team_id}</div>
+                    <div className="row" style={{ marginTop: '0.2rem' }}>
+                      <span className="badge">Value {checkin.value} {checkin.key_result_unit}</span>
+                      {checkin.progress_delta != null ? <span className="badge">Δ {checkin.progress_delta}</span> : null}
+                      {checkin.confidence != null ? <span className="badge">Confidence {checkin.confidence}/5</span> : null}
+                    </div>
+                    {checkin.note ? <p className="muted" style={{ marginTop: '0.2rem' }}>{checkin.note}</p> : null}
+                    <p className="muted">By {checkin.created_by_user_id}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {isKrCheckinModalOpen && checkinKr ? (
+          <div className="coach-modal-backdrop" role="presentation">
+            <section className="coach-modal" role="dialog" aria-label="KR check-in" aria-modal="true">
+              <div className="coach-modal-header row" style={{ justifyContent: 'space-between' }}>
+                <h3>Check in on KR</h3>
+                <button className="secondary" onClick={() => setIsKrCheckinModalOpen(false)}>Close</button>
+              </div>
+              <div className="panel nested">
+                <p><strong>{checkinKr.krTitle}</strong></p>
+                <p className="muted">{checkinKr.objective}</p>
+                <p className="muted">Current {checkinKr.currentValue} {checkinKr.unit} · Target {checkinKr.targetValue} {checkinKr.unit}</p>
+
+                <label>Current value</label>
+                <p className="muted">Enter the current total value (not just today’s increment). Unit: {checkinKr.unit}.</p>
+                <input value={checkinValue} onChange={(e) => setCheckinValue(e.target.value)} inputMode="decimal" />
+
+                <label>Commentary</label>
+                <textarea
+                  value={checkinNote}
+                  onChange={(e) => setCheckinNote(e.target.value)}
+                  placeholder="Add context, blockers, or confidence notes..."
+                  rows={4}
+                />
+
+                {checkinStatus ? <p className="muted">{checkinStatus}</p> : null}
+              </div>
+
+              <div className="row">
+                <button className="secondary" onClick={() => setIsKrCheckinModalOpen(false)}>Cancel</button>
+                <button onClick={() => void submitKrCheckin()}>Save check-in</button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </section>
     </main>
   );

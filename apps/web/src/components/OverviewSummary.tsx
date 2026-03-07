@@ -2,6 +2,7 @@ import type { KrStatus, OverviewMetrics } from '../lib/overviewMetrics';
 
 type OverviewSummaryProps = {
   metrics: OverviewMetrics;
+  onRequestKrCheckin?: (input: { krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string }) => void;
 };
 
 const STATUS_META: Array<{ key: keyof OverviewMetrics['statusDistribution']; label: string }> = [
@@ -35,7 +36,7 @@ function ProgressBar({
   );
 }
 
-export function OverviewSummary({ metrics }: OverviewSummaryProps) {
+export function OverviewSummary({ metrics, onRequestKrCheckin }: OverviewSummaryProps) {
   if (!metrics.totalKrs) {
     return (
       <section className="panel nested" data-testid="overview-summary-empty">
@@ -149,7 +150,26 @@ export function OverviewSummary({ metrics }: OverviewSummaryProps) {
                 <ul className="kr-visual-list">
                   {objective.keyResults.map((kr) => (
                     <li key={kr.id} data-testid={`objective-${objective.id}-kr-${kr.id}`}>
-                      <span className="kr-title" title={kr.title}>{kr.title}</span>
+                      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="kr-title" title={kr.title}>{kr.title}</span>
+                        <button
+                          type="button"
+                          className="secondary kr-checkin-trigger"
+                          aria-label={`Check in for ${kr.title}`}
+                          title="Check in"
+                          onClick={() => onRequestKrCheckin?.({
+                            krId: kr.id,
+                            krTitle: kr.title,
+                            objective: objective.objective,
+                            currentValue: kr.currentValue,
+                            targetValue: kr.targetValue,
+                            unit: kr.unit
+                          })}
+                        >
+                          <span aria-hidden="true">📝</span>
+                          <span className="kr-checkin-label">Check in</span>
+                        </button>
+                      </div>
                       <ProgressBar
                         value={kr.progressPercent}
                         label={`${kr.title} progress`}
