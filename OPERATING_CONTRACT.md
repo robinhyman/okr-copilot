@@ -35,6 +35,7 @@ A task is only "done" when all apply:
 - Requested scope is implemented.
 - Relevant tests/checks pass.
 - Docs updated when behavior/UX/API changed.
+- Demo environment remains populated with sufficient sample data (unless Robin explicitly requests an empty state).
 - Changes committed and pushed.
 - PR status communicated (or merge completed if requested).
 
@@ -60,7 +61,14 @@ If any agreed step is missed:
 - Base branch for product work: `main` unless explicitly changed.
 - Report merge readiness using: checks status, mergeability, review blockers.
 
-## 7) Priority order for rules
+## 7) Demo data default policy (hard requirement)
+
+- Default app state must be demo-ready and populated.
+- "No data" / empty state is only allowed when Robin explicitly asks for it.
+- Before handoff, verify demo data exists and reseed if needed (e.g., `npm run seed:demo` and/or `npm run demo:prepare`).
+- If data is unexpectedly empty, treat it as a blocker and fix before calling work complete.
+
+## 8) Priority order for rules
 
 1. Explicit latest instruction from Robin
 2. This `OPERATING_CONTRACT.md`
