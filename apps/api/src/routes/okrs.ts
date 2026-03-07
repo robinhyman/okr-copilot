@@ -6,6 +6,7 @@ import {
   appendDraftVersion,
   createDraftSession,
   createOkr,
+  deleteDraftSession,
   getDraftSessionById,
   getLeaderRollup,
   getOkrTeamIdByKeyResultId,
@@ -13,6 +14,7 @@ import {
   listKrCheckins,
   listManagerDigest,
   listOkrsAcrossTeams,
+  listTeamCheckins,
   listOkrsForTeam,
   publishDraftSession,
   updateOkr
@@ -346,6 +348,24 @@ okrsRouter.post('/api/okr-drafts/:id/chat', requireMutatingAuth, async (req, res
   }
 });
 
+okrsRouter.delete('/api/okr-drafts/:id', requireMutatingAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'invalid_draft_session_id' });
+
+  try {
+    const actor = await requesterActor(req);
+    if (!canManageDrafts(actor, actor.activeTeamId)) {
+      return res.status(403).json({ ok: false, error: 'forbidden_manage_drafts' });
+    }
+
+    const deleted = await deleteDraftSession({ sessionId: id, teamId: actor.activeTeamId, actorUserId: actor.userId });
+    if (!deleted) return res.status(404).json({ ok: false, error: 'draft_not_found' });
+    return res.status(200).json({ ok: true, deleted: true });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'failed_delete_draft' });
+  }
+});
+
 okrsRouter.post('/api/okr-drafts/:id/publish', requireMutatingAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ ok: false, error: 'invalid_draft_id' });
@@ -375,6 +395,26 @@ okrsRouter.get('/api/okrs', requireMutatingAuth, async (req, res) => {
     return res.status(200).json({ ok: true, okrs, activeTeamId: actor.activeTeamId });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_to_list_okrs' });
+  }
+});
+
+okrsRouter.get('/api/checkins', requireMutatingAuth, async (req, res) => {
+  const limitRaw = req.query?.limit;
+  const daysRaw = req.query?.days;
+  const limit = typeof limitRaw === 'string' ? Number(limitRaw) : 100;
+  const days = typeof daysRaw === 'string' ? Number(daysRaw) : 30;
+
+  try {
+    const actor = await requesterActor(req);
+    const visibleTeams = actor.memberships.some((m) => m.role === 'senior_leader') ? actorTeamIds(actor) : [actor.activeTeamId];
+    const checkins = await listTeamCheckins(visibleTeams, Number.isFinite(limit) ? limit : 100);
+    const cutoffMs = Number.isFinite(days) ? Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000 : null;
+    const filtered = cutoffMs == null
+      ? checkins
+      : checkins.filter((checkin: any) => new Date(checkin.created_at).getTime() >= cutoffMs);
+    return res.status(200).json({ ok: true, checkins: filtered });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'failed_list_team_checkins' });
   }
 });
 

@@ -47,6 +47,7 @@ function suggestAction(item: ManagerDigestItem): string {
 }
 
 export function ManagerActionDigestSnapshot({ digest }: Props) {
+  const [collapsed, setCollapsed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [actionStatus, setActionStatus] = useState('');
 
@@ -68,7 +69,17 @@ export function ManagerActionDigestSnapshot({ digest }: Props) {
           <h3>Manager action digest</h3>
           <p className="muted">Focus on the top intervention KRs this week</p>
         </div>
-        <span className="badge">Quality: {qualityLabel}</span>
+        <div className="row">
+          <span className="badge">Quality: {qualityLabel}</span>
+          <button
+            className="secondary"
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed((value) => !value)}
+            data-testid="manager-digest-collapse-toggle"
+          >
+            {collapsed ? 'Show details' : 'Hide details'}
+          </button>
+        </div>
       </div>
 
       <div className="manager-kpi-grid" data-testid="manager-digest-kpis">
@@ -90,48 +101,52 @@ export function ManagerActionDigestSnapshot({ digest }: Props) {
         </div>
       </div>
 
-      <div className="manager-digest-priority-list">
-        {topItems.map((item) => (
-          <article key={item.keyResultId} className="manager-digest-item" data-testid={`digest-item-${item.keyResultId}`}>
-            <div className="manager-digest-item-header">
-              <strong>{item.title}</strong>
-              {typeof item.riskScore === 'number' ? <span className="badge">risk {Math.round(item.riskScore)}</span> : null}
-            </div>
-            <div className="muted">{item.objective}</div>
-            <div className="row" style={{ marginTop: '0.2rem' }}>
-              <span className="badge">{item.riskLevel.replace('_', ' ')}</span>
-              <span className="badge">{item.staleDays}d stale</span>
-              {(item.reasonCodes ?? []).slice(0, 2).map((reason) => (
-                <span key={reason} className="badge">{reasonLabel(reason)}</span>
-              ))}
-            </div>
-            <div className="muted" style={{ marginTop: '0.2rem' }}>Next action: {suggestAction(item)}</div>
-            <div className="row" style={{ marginTop: '0.35rem' }}>
-              <button className="secondary" onClick={() => setActionStatus(`Nudge queued for KR ${item.keyResultId}`)}>Nudge owner</button>
-              <button className="secondary" onClick={() => setActionStatus(`Check-in reminder queued for KR ${item.keyResultId}`)}>Schedule check-in</button>
-            </div>
-          </article>
-        ))}
-      </div>
+      {!collapsed ? (
+        <>
+          <div className="manager-digest-priority-list">
+            {topItems.map((item) => (
+              <article key={item.keyResultId} className="manager-digest-item" data-testid={`digest-item-${item.keyResultId}`}>
+                <div className="manager-digest-item-header">
+                  <strong>{item.title}</strong>
+                  {typeof item.riskScore === 'number' ? <span className="badge">risk {Math.round(item.riskScore)}</span> : null}
+                </div>
+                <div className="muted">{item.objective}</div>
+                <div className="row" style={{ marginTop: '0.2rem' }}>
+                  <span className="badge">{item.riskLevel.replace('_', ' ')}</span>
+                  <span className="badge">{item.staleDays}d stale</span>
+                  {(item.reasonCodes ?? []).slice(0, 2).map((reason) => (
+                    <span key={reason} className="badge">{reasonLabel(reason)}</span>
+                  ))}
+                </div>
+                <div className="muted" style={{ marginTop: '0.2rem' }}>Next action: {suggestAction(item)}</div>
+                <div className="row" style={{ marginTop: '0.35rem' }}>
+                  <button className="secondary" onClick={() => setActionStatus(`Nudge queued for KR ${item.keyResultId}`)}>Nudge owner</button>
+                  <button className="secondary" onClick={() => setActionStatus(`Check-in reminder queued for KR ${item.keyResultId}`)}>Schedule check-in</button>
+                </div>
+              </article>
+            ))}
+          </div>
 
-      {remaining.length > 0 ? (
-        <div style={{ marginTop: '0.5rem' }}>
-          <button className="secondary" onClick={() => setExpanded((value) => !value)}>
-            {expanded ? `Hide ${remaining.length} additional items` : `Show ${remaining.length} additional items`}
-          </button>
-          {expanded ? (
-            <ul className="history" data-testid="manager-digest-expanded-list">
-              {remaining.map((item) => (
-                <li key={item.keyResultId}>
-                  <strong>{item.title}</strong> <span className="muted">({item.objective})</span>
-                </li>
-              ))}
-            </ul>
+          {remaining.length > 0 ? (
+            <div style={{ marginTop: '0.5rem' }}>
+              <button className="secondary" onClick={() => setExpanded((value) => !value)}>
+                {expanded ? `Hide ${remaining.length} additional items` : `Show ${remaining.length} additional items`}
+              </button>
+              {expanded ? (
+                <ul className="history" data-testid="manager-digest-expanded-list">
+                  {remaining.map((item) => (
+                    <li key={item.keyResultId}>
+                      <strong>{item.title}</strong> <span className="muted">({item.objective})</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
           ) : null}
-        </div>
-      ) : null}
 
-      {actionStatus ? <p className="muted">{actionStatus}</p> : null}
+          {actionStatus ? <p className="muted">{actionStatus}</p> : null}
+        </>
+      ) : null}
     </section>
   );
 }

@@ -842,6 +842,24 @@ button.secondary {
   align-items: center;
 }
 
+.kr-checkin-trigger {
+  min-width: 2rem;
+  padding: 0.2rem 0.45rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.kr-checkin-label {
+  display: none;
+  font-size: 0.78rem;
+}
+
+.kr-checkin-trigger:hover .kr-checkin-label,
+.kr-checkin-trigger:focus-visible .kr-checkin-label {
+  display: inline;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;

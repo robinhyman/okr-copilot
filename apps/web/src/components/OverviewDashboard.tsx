@@ -35,9 +35,10 @@ type OverviewDashboardProps = {
   metrics: OverviewMetrics;
   managerDigest: ManagerDigest | null;
   leaderRollup: LeaderRollup | null;
+  onRequestKrCheckin?: (input: { krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string }) => void;
 };
 
-export function OverviewDashboard({ role, metrics, managerDigest, leaderRollup }: OverviewDashboardProps) {
+export function OverviewDashboard({ role, metrics, managerDigest, leaderRollup, onRequestKrCheckin }: OverviewDashboardProps) {
   return (
     <section className="panel" data-testid="overview-dashboard">
       <h2>Overview</h2>
@@ -46,7 +47,7 @@ export function OverviewDashboard({ role, metrics, managerDigest, leaderRollup }
 
       {role === 'senior_leader' && leaderRollup ? <LeaderRollupSnapshot rollup={leaderRollup} /> : null}
 
-      <OverviewSummary metrics={metrics} />
+      <OverviewSummary metrics={metrics} onRequestKrCheckin={onRequestKrCheckin} />
     </section>
   );
 }
