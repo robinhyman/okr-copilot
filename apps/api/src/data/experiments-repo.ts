@@ -78,6 +78,17 @@ function allocateVariant(input: {
   return bucket < input.weights.wizard_first ? 'wizard_first' : 'conversational_first';
 }
 
+export function computeDefaultModeVariantForTest(input: {
+  experimentKey: string;
+  userId: string;
+  teamId: string;
+  trafficPercent: number;
+  weights: { wizard_first: number; conversational_first: number };
+  killSwitches: { wizard_first: boolean; conversational_first: boolean };
+}): DefaultModeVariant {
+  return allocateVariant(input);
+}
+
 export function resolveDefaultModeConfigFromEnv(env: NodeJS.ProcessEnv): DefaultModeExperimentConfig {
   const enabled = ['1', 'true', 'yes', 'on'].includes((env.EXPERIMENT_DEFAULT_MODE_ENABLED ?? '').toLowerCase().trim());
   const allowOverrideHeader = ['1', 'true', 'yes', 'on'].includes((env.EXPERIMENT_DEFAULT_MODE_ALLOW_OVERRIDE ?? '').toLowerCase().trim());

@@ -4,6 +4,7 @@ import pg from 'pg';
 import request from 'supertest';
 import { createApp } from '../app.js';
 import { runMigrations } from '../db/migrate.js';
+import { computeDefaultModeVariantForTest, resolveDefaultModeConfigFromEnv } from '../data/experiments-repo.js';
 
 const { Pool } = pg;
 const databaseUrl =
@@ -15,7 +16,7 @@ const authHeaders = {
 };
 
 async function resetTables() {
-  await pool.query('TRUNCATE TABLE experiment_assignments, kr_checkins, key_results, okrs RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE TABLE product_events, experiment_assignments, kr_checkins, key_results, okrs RESTART IDENTITY CASCADE');
 }
 
 test.before(async () => {
@@ -92,6 +93,117 @@ test('default-mode experiment endpoint returns additive response shape', async (
     if (previousEnabled === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_ENABLED;
     else process.env.EXPERIMENT_DEFAULT_MODE_ENABLED = previousEnabled;
   }
+});
+
+test('default-mode assignment distribution is balanced over >=200 synthetic users', async () => {
+  const previousEnabled = process.env.EXPERIMENT_DEFAULT_MODE_ENABLED;
+  const previousTraffic = process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT;
+  const previousWiz = process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD;
+  const previousConv = process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL;
+
+  process.env.EXPERIMENT_DEFAULT_MODE_ENABLED = 'true';
+  process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT = '100';
+  process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD = '50';
+  process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL = '50';
+
+  try {
+    const config = resolveDefaultModeConfigFromEnv(process.env);
+    let wizard = 0;
+    let conversational = 0;
+
+    for (let i = 1; i <= 1000; i += 1) {
+      const variant = computeDefaultModeVariantForTest({
+        experimentKey: config.experimentKey,
+        userId: `sim_user_${i}`,
+        teamId: 'team_product',
+        trafficPercent: config.trafficPercent,
+        weights: config.weights,
+        killSwitches: config.killSwitches
+      });
+      if (variant === 'wizard_first') wizard += 1;
+      if (variant === 'conversational_first') conversational += 1;
+    }
+
+    const wizardRatio = wizard / (wizard + conversational);
+    assert.ok(wizardRatio >= 0.45 && wizardRatio <= 0.55);
+  } finally {
+    if (previousEnabled === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_ENABLED;
+    else process.env.EXPERIMENT_DEFAULT_MODE_ENABLED = previousEnabled;
+    if (previousTraffic === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT;
+    else process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT = previousTraffic;
+    if (previousWiz === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD;
+    else process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD = previousWiz;
+    if (previousConv === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL;
+    else process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL = previousConv;
+  }
+});
+
+test('product events endpoint accepts batched telemetry events', async () => {
+  const app = createApp();
+
+  const res = await request(app)
+    .post('/api/events/product')
+    .set({ ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' })
+    .send({
+      events: [
+        {
+          event_name: 'ab_exposure',
+          experiment_id: 'okr_create_entry_v1',
+          variant: 'wizard_first',
+          persona: 'manager',
+          request_id: 'req-1',
+          source: 'ui'
+        },
+        {
+          event_name: 'coach_entry_clicked',
+          experiment_id: 'okr_create_entry_v1',
+          variant: 'wizard_first',
+          persona: 'manager',
+          request_id: 'req-2',
+          entry_point: 'primary_cta'
+        }
+      ]
+    });
+
+  assert.equal(res.status, 202);
+  assert.equal(res.body?.ok, true);
+  assert.equal(res.body?.accepted, 2);
+
+  const count = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM product_events');
+  assert.equal(Number(count.rows[0].count), 2);
+});
+
+test('product events endpoint persists required experiment dimensions at high acceptance', async () => {
+  const app = createApp();
+  const events = Array.from({ length: 100 }).map((_, idx) => ({
+    event_name: 'ab_exposure',
+    experiment_id: 'okr_create_entry_v1',
+    variant: idx % 2 === 0 ? 'wizard_first' : 'conversational_first',
+    persona: 'manager',
+    request_id: `req-${idx}`,
+    session_id: `sess-${idx}`,
+    app_version: 'web-dev'
+  }));
+
+  const res = await request(app)
+    .post('/api/events/product')
+    .set({ ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' })
+    .send({ events });
+
+  assert.equal(res.status, 202);
+  assert.equal(res.body?.accepted, 100);
+
+  const completeness = await pool.query<{ total: string; complete: string }>(
+    `SELECT
+      COUNT(*)::text AS total,
+      COUNT(*) FILTER (WHERE event_name IS NOT NULL AND experiment_id IS NOT NULL AND variant IS NOT NULL AND user_id IS NOT NULL AND team_id IS NOT NULL)::text AS complete
+     FROM product_events`
+  );
+
+  const total = Number(completeness.rows[0].total);
+  const complete = Number(completeness.rows[0].complete);
+  assert.ok(total > 0);
+  assert.ok(complete / total >= 0.99);
 });
 
 test('draft -> save -> fetch -> check-in happy path', async () => {

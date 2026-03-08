@@ -20,6 +20,7 @@ import {
   updateOkr
 } from '../data/okrs-repo.js';
 import { resolveDefaultModeAssignment, resolveDefaultModeConfigFromEnv } from '../data/experiments-repo.js';
+import { insertProductEvents, type ProductEventInput } from '../data/product-events-repo.js';
 import { createOkrDraftProvider, type OkrConversationMessage } from '../services/ai/okr-draft-provider.js';
 import { applyPreviewSelection, buildPreview, parseWorkbook } from '../services/excel/kr-import.js';
 import { canCheckin, canManageDrafts, canManageOkrs, canPublishOkrs, canViewTeam, getActorContext, type ActorContext } from '../modules/auth/rbac.js';
@@ -222,6 +223,39 @@ okrsRouter.get('/api/experiments/default-mode', requireMutatingAuth, async (req,
     return res.status(200).json({ ok: true, ...resolution });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_resolve_default_mode' });
+  }
+});
+
+okrsRouter.post('/api/events/product', requireMutatingAuth, async (req, res) => {
+  const rawEvents = Array.isArray(req.body?.events) ? req.body.events : [];
+  if (!rawEvents.length) return res.status(400).json({ ok: false, error: 'events_required' });
+  if (rawEvents.length > 200) return res.status(400).json({ ok: false, error: 'too_many_events' });
+
+  const actor = await requesterActor(req);
+  const events: ProductEventInput[] = [];
+  for (const item of rawEvents) {
+    if (!item || typeof item !== 'object') continue;
+    const eventName = typeof item.event_name === 'string' ? item.event_name.trim() : '';
+    if (!eventName) continue;
+
+    const userId = typeof item.user_id === 'string' && item.user_id.trim() ? item.user_id.trim() : actor.userId;
+    const teamId = typeof item.team_id === 'string' && item.team_id.trim() ? item.team_id.trim() : actor.activeTeamId;
+
+    events.push({
+      ...(item as ProductEventInput),
+      event_name: eventName,
+      user_id: userId,
+      team_id: teamId
+    });
+  }
+
+  if (!events.length) return res.status(400).json({ ok: false, error: 'valid_events_required' });
+
+  try {
+    const accepted = await insertProductEvents(events);
+    return res.status(202).json({ ok: true, accepted });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'failed_insert_events' });
   }
 });
 
