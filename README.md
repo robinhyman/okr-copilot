@@ -7,6 +7,15 @@ Pragmatic Day 1 Block 2 scaffold for the MVP as a **modular monolith in a local-
 - Matches ADR-002: deterministic-first runtime with LLM as optional orchestrated capability.
 - Keeps setup light for local development on this machine and when cloned elsewhere.
 
+## Start here (delivery standards)
+
+For every software increment, use these in order:
+
+1. `docs/development-operating-system.md` (execution system)
+2. `docs/product-increment-delivery-standard.md` (definition of done + validation gates)
+
+No increment is complete unless both are followed and evidence is documented in `docs/demo-<increment>-<date>.md`.
+
 ## Repo structure
 
 ```txt

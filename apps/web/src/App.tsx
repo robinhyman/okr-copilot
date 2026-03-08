@@ -30,6 +30,7 @@ type DraftSession = {
   version_count: number;
   current_draft: DraftPayload | null;
   updated_at: string;
+  variant?: 'wizard_first' | 'conversational_first';
 };
 
 type ManagerDigest = {
@@ -56,6 +57,17 @@ type TeamCheckin = {
   note: string | null;
   created_by_user_id: string;
   created_at: string;
+};
+
+type FlowMode = 'wizard' | 'conversational';
+type Variant = 'wizard_first' | 'conversational_first' | 'none';
+
+type AssignmentResponse = {
+  ok: boolean;
+  experimentKey?: string;
+  variant?: Variant;
+  defaultMode?: FlowMode;
+  reason?: 'assigned' | 'forced_off' | 'override' | 'not_enrolled';
 };
 
 const apiBase =
@@ -119,8 +131,26 @@ export function App() {
   const [checkinValue, setCheckinValue] = useState('');
   const [checkinNote, setCheckinNote] = useState('');
   const [checkinStatus, setCheckinStatus] = useState('');
+
+  const [defaultMode, setDefaultMode] = useState<FlowMode>('wizard');
+  const [currentMode, setCurrentMode] = useState<FlowMode>('wizard');
+  const [assignmentVariant, setAssignmentVariant] = useState<Variant>('none');
+  const [assignmentReady, setAssignmentReady] = useState(false);
+  const [escapeHatchActive, setEscapeHatchActive] = useState(false);
+  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
+  const [switchBanner, setSwitchBanner] = useState('');
+  const [wizardInput, setWizardInput] = useState({
+    focusArea: '',
+    timeframe: 'Q2 2026',
+    baseline: '',
+    constraints: '',
+    objectiveStatement: '',
+    keyResultCount: 3
+  });
+
   const sessionStartRef = useRef<number | null>(null);
   const modalOpenRef = useRef<number | null>(null);
+  const exposureSentRef = useRef(false);
 
   const persona = PERSONAS.find((x) => x.key === personaKey) ?? PERSONAS[0];
   const actorHeaders = { 'x-auth-user-id': persona.userId, 'x-auth-team-id': persona.teamId };
@@ -151,6 +181,56 @@ export function App() {
       ),
     [okrs]
   );
+
+  async function trackUiEvent(event_name: string, props: Record<string, unknown> = {}) {
+    const payload = {
+      event_name,
+      experiment_id: 'okr_create_entry_v1',
+      variant: assignmentVariant,
+      user_id: persona.userId,
+      persona: role,
+      team_id: persona.teamId,
+      session_id: `${persona.userId}:${persona.teamId}`,
+      draft_session_id: activeDraftId,
+      request_id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      app_version: 'web-dev',
+      ...props
+    };
+
+    try {
+      await jsonFetch('/api/events/product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: [payload] })
+      }, actorHeaders);
+    } catch {
+      // non-blocking telemetry
+    }
+  }
+
+  async function resolveDefaultMode() {
+    setAssignmentReady(false);
+    try {
+      const response = await jsonFetch('/api/experiments/default-mode', undefined, actorHeaders) as AssignmentResponse;
+      const resolved = response.defaultMode === 'conversational' ? 'conversational' : 'wizard';
+      const variant = response.variant ?? (resolved === 'conversational' ? 'conversational_first' : 'wizard_first');
+      setDefaultMode(resolved);
+      setCurrentMode(resolved);
+      setAssignmentVariant(variant);
+      void trackUiEvent('ab_assignment_resolved', {
+        variant,
+        source: response.reason === 'assigned' ? 'new' : response.reason === 'forced_off' ? 'fallback' : 'sticky'
+      });
+    } catch {
+      setDefaultMode('wizard');
+      setCurrentMode('wizard');
+      setAssignmentVariant('wizard_first');
+      void trackUiEvent('ab_assignment_resolved', { variant: 'wizard_first', source: 'fallback' });
+    } finally {
+      setAssignmentReady(true);
+      exposureSentRef.current = false;
+    }
+  }
 
   async function loadOkrs() {
     const response = await jsonFetch('/api/okrs', undefined, actorHeaders);
@@ -191,6 +271,7 @@ export function App() {
     void loadDrafts();
     void loadOverviewRoleData();
     void loadTeamCheckins(checkinDaysFilter);
+    void resolveDefaultMode();
     setActiveDraftId(null);
     setActiveDraft(null);
     setChatMessages([]);
@@ -205,13 +286,35 @@ export function App() {
     setCheckinValue('');
     setCheckinNote('');
     setCheckinStatus('');
+    setSwitchBanner('');
+    setShowSwitchConfirm(false);
+    setEscapeHatchActive(false);
     sessionStartRef.current = null;
     modalOpenRef.current = null;
   }, [personaKey]);
 
+  useEffect(() => {
+    if (isCoachModalOpen && assignmentReady && !exposureSentRef.current) {
+      exposureSentRef.current = true;
+      void trackUiEvent('ab_exposure', { variant: assignmentVariant });
+    }
+  }, [isCoachModalOpen, assignmentReady, assignmentVariant]);
+
   function navigate(path: RoutePath) {
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
     setRoute(path);
+  }
+
+  async function openCreateFlow(entryPoint: 'primary_cta' | 'resume_draft' | 'deep_link') {
+    if (!assignmentReady) return;
+    setCurrentMode(defaultMode);
+    setIsCoachModalOpen(true);
+    modalOpenRef.current = performance.now();
+    void trackUiEvent('coach_entry_clicked', { entry_point: entryPoint, variant: assignmentVariant });
+
+    if (defaultMode === 'conversational') {
+      await startDraftSession();
+    }
   }
 
   async function startDraftSession() {
@@ -232,7 +335,7 @@ export function App() {
       const created = await jsonFetch('/api/okr-drafts/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: `${persona.teamId} coach draft` })
+        body: JSON.stringify({ title: `${persona.teamId} coach draft`, metadata: { variant: assignmentVariant } })
       }, actorHeaders);
       const sessionId = Number(created?.session?.id);
       setActiveDraftId(sessionId);
@@ -255,6 +358,7 @@ export function App() {
       const firstResponse = sessionStartRef.current !== null ? Math.round(performance.now() - sessionStartRef.current) : null;
       setFirstCoachResponseMs(firstResponse);
       setStatus(`Coach session started · deterministic first turn${firstResponse !== null ? ` · first response ${firstResponse}ms` : ''}`.trim());
+      void trackUiEvent('okr_draft_started', { flow: 'conversational' });
       void loadDrafts();
     } catch (error: any) {
       setStatus(`Could not start coach session: ${error?.message ?? 'unknown error'}`);
@@ -265,14 +369,50 @@ export function App() {
     }
   }
 
+  async function generateWizardDraft() {
+    setIsStartingCoachSession(true);
+    setStatus('Generating wizard draft…');
+    try {
+      if (!activeDraftId) {
+        const created = await jsonFetch('/api/okr-drafts/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: `${persona.teamId} wizard draft`, metadata: { variant: assignmentVariant } })
+        }, actorHeaders);
+        setActiveDraftId(Number(created?.session?.id));
+      }
+
+      const response = await jsonFetch('/api/okrs/wizard-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...wizardInput, aiAssist: true })
+      }, actorHeaders);
+
+      setActiveDraft(response.draft);
+      setStatus(`Wizard draft generated.${response.metadata?.source ? ` source: ${response.metadata.source}` : ''}`);
+      void trackUiEvent('okr_draft_generated', {
+        flow: 'wizard',
+        generation_source: response.metadata?.source ?? 'fallback',
+        fallback_reason: response.metadata?.reason ?? null
+      });
+      await loadDrafts();
+    } catch (error: any) {
+      setStatus(`Wizard generation failed: ${error?.message ?? 'unknown error'}`);
+    } finally {
+      setIsStartingCoachSession(false);
+    }
+  }
+
   async function resumeDraft(session: DraftSession) {
     setActiveDraftId(session.id);
     setActiveDraft(session.current_draft ?? null);
+    setCurrentMode(session.variant === 'wizard_first' ? 'wizard' : session.variant === 'conversational_first' ? 'conversational' : defaultMode);
     setChatMessages([{ role: 'assistant', content: `Resumed draft: ${session.title}. Tell me what to refine.` }]);
     setCoachPrompts([]);
     setIsCoachThinking(false);
     setIsStartingCoachSession(false);
     setIsCoachModalOpen(true);
+    void trackUiEvent('coach_entry_clicked', { entry_point: 'resume_draft', variant: assignmentVariant });
   }
 
   async function sendChatTurn(prefilled?: string) {
@@ -312,6 +452,12 @@ export function App() {
       const sourceStatus = formatTurnStatus(response.metadata);
       const turnLatencyMs = Math.round(performance.now() - turnStartedAt);
       setStatus(`${response.mode === 'questions' ? 'Coach asked follow-up questions.' : 'Draft refined.'}${sourceStatus ? ` · ${sourceStatus}` : ''} · response ${turnLatencyMs}ms`);
+      void trackUiEvent('coach_response_received', {
+        flow: 'conversational',
+        latency_ms: turnLatencyMs,
+        source: response.metadata?.source,
+        fallback_reason: response.metadata?.reason ?? null
+      });
       void loadDrafts();
     } catch (error: any) {
       setStatus(`Coach response failed: ${error?.message ?? 'unknown error'}`);
@@ -329,6 +475,7 @@ export function App() {
       body: JSON.stringify({ draft: activeDraft, status: statusToSave, summary: 'Saved from review pane' })
     }, actorHeaders);
     setStatus(statusToSave === 'ready' ? 'Draft marked ready.' : 'Draft saved.');
+    void trackUiEvent('draft_saved_success', { flow: currentMode });
     await loadDrafts();
   }
 
@@ -352,9 +499,30 @@ export function App() {
     await jsonFetch(`/api/okr-drafts/${activeDraftId}/publish`, { method: 'POST' }, actorHeaders);
     setStatus('Draft published to OKRs.');
     setIsCoachModalOpen(false);
+    void trackUiEvent('draft_publish_success', { flow: currentMode });
     await loadOkrs();
     await loadDrafts();
     await loadOverviewRoleData();
+  }
+
+  async function switchExperience(nextMode: FlowMode, reason: 'manual' | 'error_recovery' | 'performance_timeout' = 'manual') {
+    if (nextMode === currentMode) return;
+    if (isCoachThinking) {
+      setStatus('Please wait for current response before switching experience.');
+      return;
+    }
+    setCurrentMode(nextMode);
+    setSwitchBanner(`You’re now using ${nextMode === 'wizard' ? 'Experience A' : 'Experience B'}. Your draft has been preserved.`);
+    setShowSwitchConfirm(false);
+    void trackUiEvent('ab_switch_confirmed', { from_flow: currentMode, to_flow: nextMode });
+    if (reason !== 'manual') {
+      void trackUiEvent('ab_escape_hatch_used', { reason });
+    }
+  }
+
+  function useStableExperience() {
+    setEscapeHatchActive(true);
+    void switchExperience('wizard', 'error_recovery');
   }
 
   function openKrCheckinModal(input: { krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string }) {
@@ -421,13 +589,14 @@ export function App() {
 
         {route === '/okrs' && (
           <section className="panel">
-            <h2>Conversational OKR Coach</h2>
+            <h2>OKR Creation</h2>
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              <button disabled={isStartingCoachSession} onClick={() => void startDraftSession()}>
-                {isStartingCoachSession ? 'Starting coach…' : 'Create OKR with Coach'}
+              <button disabled={!assignmentReady || isStartingCoachSession} onClick={() => void openCreateFlow('primary_cta')}>
+                {!assignmentReady ? 'Resolving experience…' : defaultMode === 'wizard' ? 'Create OKR with Wizard' : 'Create OKR with Coach'}
               </button>
+              <p className="muted">Experiment: {assignmentVariant === 'wizard_first' ? 'Experience A' : assignmentVariant === 'conversational_first' ? 'Experience B' : 'Stable'}</p>
               <p className="muted">State: {coachUiState}</p>
-              {!!status && <p className="muted">{status}</p>}
+              {!!status && <p className="muted" aria-live="polite">{status}</p>}
               {(modalOpenLatencyMs !== null || firstCoachResponseMs !== null) && (
                 <p className="muted">Perf: modal {modalOpenLatencyMs ?? '-'}ms · first response {firstCoachResponseMs ?? '-'}ms</p>
               )}
@@ -449,56 +618,99 @@ export function App() {
               <div className="coach-modal-backdrop" role="presentation">
                 <section className="coach-modal" role="dialog" aria-label="OKR coach dialog" aria-modal="true">
                   <div className="coach-modal-header row" style={{ justifyContent: 'space-between' }}>
-                    <h3>Create OKR with Coach</h3>
-                    <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
+                    <h3>{currentMode === 'wizard' ? 'Create OKR with Wizard' : 'Create OKR with Coach'} <span className="badge">{currentMode === 'wizard' ? 'Experience A' : 'Experience B'}</span> {escapeHatchActive ? <span className="badge">Stable experience on</span> : null}</h3>
+                    <div className="row">
+                      <button className="secondary" onClick={() => { setShowSwitchConfirm((v) => !v); void trackUiEvent('ab_switch_initiated', { from_flow: currentMode }); }}>Switch experience</button>
+                      <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
+                    </div>
                   </div>
 
-                  <div className="coach-modal-grid">
-                    <div className="panel nested">
-                      <h4>Conversation</h4>
-                      <ul className="history">
-                        {chatMessages.map((m, idx) => {
-                          const turnStatus = formatTurnStatus(m.metadata);
-                          return (
-                            <li key={idx}>
-                              <strong>{m.role === 'assistant' ? 'Coach' : 'You'}:</strong> {m.content}
-                              {turnStatus ? <div className="muted">{turnStatus}</div> : null}
-                            </li>
-                          );
-                        })}
-                        {(isStartingCoachSession || isCoachThinking) && (
-                          <li className="coach-thinking" aria-live="polite">
-                            <strong>Coach:</strong>
-                            <span className="typing-dots" aria-hidden="true">
-                              <span />
-                              <span />
-                              <span />
-                            </span>
-                            <span className="muted"> thinking{thinkingElapsedSeconds && thinkingElapsedSeconds > 4 ? ` (${thinkingElapsedSeconds}s)` : ''}</span>
-                          </li>
-                        )}
-                      </ul>
+                  {showSwitchConfirm ? (
+                    <div className="panel nested" role="alertdialog" aria-label="Switch experience">
+                      <p><strong>Switch experience?</strong> We’ll keep your draft content. You may see a different layout and guidance style.</p>
                       <div className="row">
-                        <input
-                          value={chatInput}
-                          disabled={isCoachThinking || isStartingCoachSession}
-                          placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Answer the coach...'}
-                          onChange={(e) => setChatInput(e.target.value)}
-                        />
-                        <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
+                        <button onClick={() => void switchExperience(currentMode === 'wizard' ? 'conversational' : 'wizard')}>Switch now</button>
+                        <button className="secondary" onClick={() => { setShowSwitchConfirm(false); void trackUiEvent('ab_switch_cancelled'); }}>Cancel</button>
+                        <button className="secondary" onClick={() => useStableExperience()}>Use stable experience</button>
                       </div>
                     </div>
+                  ) : null}
+
+                  {switchBanner ? <p className="muted" aria-live="polite">{switchBanner}</p> : null}
+
+                  <div className="coach-modal-grid">
+                    {currentMode === 'wizard' ? (
+                      <div className="panel nested wizard-input-panel">
+                        <h4>Wizard inputs</h4>
+                        <label>Focus area</label>
+                        <input value={wizardInput.focusArea} onChange={(e) => setWizardInput((v) => ({ ...v, focusArea: e.target.value }))} placeholder="e.g. onboarding conversion" />
+                        <label>Timeframe</label>
+                        <input value={wizardInput.timeframe} onChange={(e) => setWizardInput((v) => ({ ...v, timeframe: e.target.value }))} />
+                        <label>Current baseline</label>
+                        <input value={wizardInput.baseline} onChange={(e) => setWizardInput((v) => ({ ...v, baseline: e.target.value }))} placeholder="Current baseline metric" />
+                        <label>Constraints</label>
+                        <textarea value={wizardInput.constraints} onChange={(e) => setWizardInput((v) => ({ ...v, constraints: e.target.value }))} rows={3} />
+                        <label>Objective statement</label>
+                        <textarea value={wizardInput.objectiveStatement} onChange={(e) => setWizardInput((v) => ({ ...v, objectiveStatement: e.target.value }))} rows={3} />
+                        <label>Key result count</label>
+                        <select value={wizardInput.keyResultCount} onChange={(e) => setWizardInput((v) => ({ ...v, keyResultCount: Number(e.target.value) }))}>
+                          <option value={2}>2</option>
+                          <option value={3}>3</option>
+                          <option value={4}>4</option>
+                          <option value={5}>5</option>
+                        </select>
+                        <div className="row">
+                          <button disabled={isStartingCoachSession} onClick={() => void generateWizardDraft()}>{isStartingCoachSession ? 'Generating…' : 'Generate full draft'}</button>
+                          <button className="secondary" onClick={() => useStableExperience()}>Use stable experience</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="panel nested">
+                        <h4>Conversation</h4>
+                        <ul className="history">
+                          {chatMessages.map((m, idx) => {
+                            const turnStatus = formatTurnStatus(m.metadata);
+                            return (
+                              <li key={idx}>
+                                <strong>{m.role === 'assistant' ? 'Coach' : 'You'}:</strong> {m.content}
+                                {turnStatus ? <div className="muted">{turnStatus}</div> : null}
+                              </li>
+                            );
+                          })}
+                          {(isStartingCoachSession || isCoachThinking) && (
+                            <li className="coach-thinking" aria-live="polite">
+                              <strong>Coach:</strong>
+                              <span className="typing-dots" aria-hidden="true">
+                                <span />
+                                <span />
+                                <span />
+                              </span>
+                              <span className="muted"> thinking{thinkingElapsedSeconds && thinkingElapsedSeconds > 4 ? ` (${thinkingElapsedSeconds}s)` : ''}</span>
+                            </li>
+                          )}
+                        </ul>
+                        <div className="row">
+                          <input
+                            value={chatInput}
+                            disabled={isCoachThinking || isStartingCoachSession}
+                            placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Answer the coach...'}
+                            onChange={(e) => setChatInput(e.target.value)}
+                          />
+                          <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="panel nested">
                       <h4>Prompt focus</h4>
                       {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : <p className="muted">{isStartingCoachSession ? 'Loading coach prompts…' : 'No missing-context prompts right now.'}</p>}
                       <div className="row">
-                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
-                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
+                        <button disabled={currentMode !== 'conversational' || isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
+                        <button disabled={currentMode !== 'conversational' || isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
                       </div>
                     </div>
 
-                    <div className="panel nested">
+                    <div className="panel nested wizard-output-panel">
                       <h4>Live draft preview</h4>
                       {!activeDraft ? <p>{isStartingCoachSession ? 'Starting coach session…' : 'Draft preview building…'}</p> : (
                         <>
