@@ -33,6 +33,8 @@ type DraftSession = {
   variant?: 'wizard_first' | 'conversational_first';
 };
 
+type CloseConfirmChoice = 'cancel' | 'discard' | 'save_and_close';
+
 type ManagerDigest = {
   teamId: string;
   summary: { on_track: number; at_risk: number; off_track: number };
@@ -99,6 +101,18 @@ function personaRole(userId: string): 'manager' | 'team_member' | 'senior_leader
   return 'team_member';
 }
 
+function hasPreviewReadinessThreshold(draft: DraftPayload | null): boolean {
+  if (!draft) return false;
+  const hasObjective = draft.objective.trim().split(/\s+/).filter(Boolean).length >= 4;
+  const hasTimeframe = draft.timeframe.trim().length > 0;
+  const hasKrCandidate = draft.keyResults.some((kr) => kr.title.trim().length > 0);
+  return hasObjective && hasTimeframe && hasKrCandidate;
+}
+
+function fingerprintDraft(draft: DraftPayload | null): string {
+  return draft ? JSON.stringify(draft) : '';
+}
+
 export function App() {
   const [route, setRoute] = useState<RoutePath>(() => getRoutePath(window.location.pathname));
   const [personaKey, setPersonaKey] = useState(PERSONAS[0].key);
@@ -129,6 +143,9 @@ export function App() {
   const [currentMode, setCurrentMode] = useState<FlowMode>('conversational');
   const [assignmentVariant, setAssignmentVariant] = useState<Variant>('none');
   const [assignmentReady, setAssignmentReady] = useState(false);
+  const [isDraftPreviewUnlocked, setIsDraftPreviewUnlocked] = useState(false);
+  const [lastSavedDraftFingerprint, setLastSavedDraftFingerprint] = useState('');
+  const [isUnsavedCloseConfirmOpen, setIsUnsavedCloseConfirmOpen] = useState(false);
 
   const sessionStartRef = useRef<number | null>(null);
   const modalOpenRef = useRef<number | null>(null);
@@ -254,6 +271,9 @@ export function App() {
     setCheckinValue('');
     setCheckinNote('');
     setCheckinStatus('');
+    setIsDraftPreviewUnlocked(false);
+    setLastSavedDraftFingerprint('');
+    setIsUnsavedCloseConfirmOpen(false);
     sessionStartRef.current = null;
     modalOpenRef.current = null;
   }, [personaKey]);
@@ -273,6 +293,7 @@ export function App() {
   async function openCreateFlow(entryPoint: 'primary_cta' | 'resume_draft' | 'deep_link') {
     if (!assignmentReady) return;
     setCurrentMode('conversational');
+    setIsUnsavedCloseConfirmOpen(false);
     setIsCoachModalOpen(true);
     modalOpenRef.current = performance.now();
     void trackUiEvent('coach_entry_clicked', { entry_point: entryPoint, variant: assignmentVariant });
@@ -291,6 +312,8 @@ export function App() {
     setChatMessages([]);
     setCoachPrompts([]);
     setActiveDraft(null);
+    setIsDraftPreviewUnlocked(false);
+    setLastSavedDraftFingerprint('');
     setStatus('Starting coach session…');
 
     try {
@@ -337,8 +360,11 @@ export function App() {
     setCurrentMode('conversational');
     setChatMessages([{ role: 'assistant', content: `Resumed draft: ${session.title}. Tell me what to refine.` }]);
     setCoachPrompts([]);
+    setIsDraftPreviewUnlocked(hasPreviewReadinessThreshold(session.current_draft ?? null));
+    setLastSavedDraftFingerprint(fingerprintDraft(session.current_draft ?? null));
     setIsCoachThinking(false);
     setIsStartingCoachSession(false);
+    setIsUnsavedCloseConfirmOpen(false);
     setIsCoachModalOpen(true);
     void trackUiEvent('coach_entry_clicked', { entry_point: 'resume_draft', variant: assignmentVariant });
   }
@@ -363,6 +389,15 @@ export function App() {
       }, actorHeaders);
 
       setActiveDraft(response.draft);
+      const becameReady = hasPreviewReadinessThreshold(response.draft);
+      const requestedEarlyPreview = typeof prefilled === 'string' && prefilled.toLowerCase().includes('generate the first full draft');
+      if (!isDraftPreviewUnlocked && (becameReady || requestedEarlyPreview)) {
+        setIsDraftPreviewUnlocked(true);
+        setStatus('Draft preview is now ready.');
+        void trackUiEvent('draft_preview_revealed', {
+          reason: becameReady ? 'threshold_met' : 'explicit_generate_action'
+        });
+      }
       setCoachPrompts(Array.isArray(response.questions) ? response.questions : []);
       setChatMessages((prev) => [
         ...prev,
@@ -397,14 +432,48 @@ export function App() {
 
   async function saveDraft(statusToSave: 'saved' | 'ready' = 'saved') {
     if (!activeDraftId || !activeDraft) return;
-    await jsonFetch(`/api/okr-drafts/${activeDraftId}/versions`, {
+    const response = await jsonFetch(`/api/okr-drafts/${activeDraftId}/versions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ draft: activeDraft, status: statusToSave, summary: 'Saved from review pane' })
     }, actorHeaders);
-    setStatus(statusToSave === 'ready' ? 'Draft marked ready.' : 'Draft saved.');
-    void trackUiEvent('draft_saved_success', { flow: currentMode });
+    setLastSavedDraftFingerprint(fingerprintDraft(activeDraft));
+    const savedAt = new Date(response?.version?.created_at ?? Date.now()).toLocaleTimeString();
+    const versionNumber = Number(response?.version?.version_number ?? selectedDraft?.version_count ?? 0);
+    setStatus(statusToSave === 'ready' ? `Draft marked ready at ${savedAt} (v${versionNumber || '—'}).` : `Draft saved at ${savedAt} (v${versionNumber || '—'}).`);
+    void trackUiEvent('save_draft_success', { flow: currentMode, version_number: versionNumber || null });
     await loadDrafts();
+  }
+
+  async function handleContinueLater() {
+    if (!isCoachModalOpen) return;
+    const hasUnsavedDraftChanges = Boolean(activeDraft) && fingerprintDraft(activeDraft) !== lastSavedDraftFingerprint;
+    if (hasUnsavedDraftChanges) {
+      setIsUnsavedCloseConfirmOpen(true);
+      return;
+    }
+    setIsCoachModalOpen(false);
+    setStatus('Closed. You can continue later from Drafts.');
+  }
+
+  async function resolveUnsavedClose(choice: CloseConfirmChoice) {
+    if (choice === 'cancel') {
+      setIsUnsavedCloseConfirmOpen(false);
+      return;
+    }
+
+    if (choice === 'save_and_close') {
+      await saveDraft('saved');
+      setStatus('Draft saved. You can continue later from Drafts.');
+      setIsUnsavedCloseConfirmOpen(false);
+      setIsCoachModalOpen(false);
+      return;
+    }
+
+    setIsUnsavedCloseConfirmOpen(false);
+    setIsCoachModalOpen(false);
+    setStatus('Closed without saving recent changes. Last saved draft remains available.');
+    void trackUiEvent('continue_later_with_unsaved_changes', { resolution: 'discarded_unsaved' });
   }
 
   async function deleteDraft(sessionId: number) {
@@ -466,6 +535,14 @@ export function App() {
   }
 
   const selectedDraft = useMemo(() => drafts.find((d) => d.id === activeDraftId) ?? null, [drafts, activeDraftId]);
+  const publishEnabled = publishButtonEnabled({ canPublish, hasDraft: Boolean(activeDraft), draftStatus: selectedDraft?.status });
+  const publishBlockReason = !canPublish
+    ? 'Only managers can publish this draft.'
+    : !hasPreviewReadinessThreshold(activeDraft)
+      ? 'Need objective + timeframe + at least one KR before publishing.'
+      : selectedDraft?.status === 'published'
+        ? 'This draft is already published.'
+        : '';
   const modalOpenLatencyMs = sessionStartRef.current !== null && modalOpenRef.current !== null
     ? Math.max(0, Math.round(modalOpenRef.current - sessionStartRef.current))
     : null;
@@ -526,9 +603,7 @@ export function App() {
                 <section className="coach-modal" role="dialog" aria-label="OKR coach dialog" aria-modal="true">
                   <div className="coach-modal-header row" style={{ justifyContent: 'space-between' }}>
                     <h3>Create OKR with Coach</h3>
-                    <div className="row">
-                      <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
-                    </div>
+                    <p className="muted">Understand context → Build draft → Finalize and publish</p>
                   </div>
 
                   <div className="coach-modal-grid">
@@ -560,7 +635,7 @@ export function App() {
                         <input
                           value={chatInput}
                           disabled={isCoachThinking || isStartingCoachSession}
-                          placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Answer the coach...'}
+                          placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Reply or ask for changes…'}
                           onChange={(e) => setChatInput(e.target.value)}
                         />
                         <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
@@ -569,16 +644,27 @@ export function App() {
 
                     <div className="panel nested">
                       <h4>Prompt focus</h4>
-                      {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : <p className="muted">{isStartingCoachSession ? 'Loading coach prompts…' : 'No missing-context prompts right now.'}</p>}
+                      {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : null}
+                      <p className="muted">
+                        {isStartingCoachSession
+                          ? 'Loading prompt context…'
+                          : hasPreviewReadinessThreshold(activeDraft)
+                            ? 'You’re on track — use a shortcut or reply to coach.'
+                            : 'Tip: answer one more coach question to unlock draft preview.'}
+                      </p>
                       <div className="row">
                         <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
-                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
+                        {activeDraft?.keyResults?.length ? (
+                          <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
+                        ) : null}
                       </div>
                     </div>
 
-                    <div className="panel nested wizard-output-panel">
+                    <div className="panel nested wizard-output-panel" aria-live="polite">
                       <h4>Live draft preview</h4>
-                      {!activeDraft ? <p>{isStartingCoachSession ? 'Starting coach session…' : 'Draft preview building…'}</p> : (
+                      {!isDraftPreviewUnlocked ? (
+                        <p className="muted">Draft preview will appear once we have enough context (objective + timeframe + at least one KR).</p>
+                      ) : !activeDraft ? <p>{isStartingCoachSession ? 'Starting coach session…' : 'Draft preview building…'}</p> : (
                         <>
                           <p><strong>Objective:</strong> {activeDraft.objective}</p>
                           <p><strong>Timeframe:</strong> {activeDraft.timeframe}</p>
@@ -590,17 +676,32 @@ export function App() {
 
                   <div className="row">
                     <button className="secondary" disabled={!activeDraft || isCoachThinking || isStartingCoachSession} onClick={() => void saveDraft('saved')}>Save draft</button>
-                    <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
+                    <button className="secondary" onClick={() => void handleContinueLater()}>Continue later</button>
                     <button
-                      disabled={isCoachThinking || isStartingCoachSession || !publishButtonEnabled({ canPublish, hasDraft: Boolean(activeDraft), draftStatus: selectedDraft?.status })}
+                      disabled={isCoachThinking || isStartingCoachSession || !publishEnabled || !hasPreviewReadinessThreshold(activeDraft)}
                       onClick={() => void publishDraft()}
                     >
-                      Publish when ready
+                      Publish draft
                     </button>
                   </div>
+                  {!publishEnabled || !hasPreviewReadinessThreshold(activeDraft) ? <p className="muted">{publishBlockReason || 'Need objective + timeframe + at least one KR before publishing.'}</p> : null}
                 </section>
               </div>
             )}
+
+            {isUnsavedCloseConfirmOpen ? (
+              <div className="coach-modal-backdrop" role="presentation">
+                <section className="coach-modal unsaved-confirm" role="dialog" aria-modal="true" aria-label="Unsaved changes confirmation">
+                  <h3>Leave without saving recent changes?</h3>
+                  <p>Your last saved draft is safe. Recent edits will be lost.</p>
+                  <div className="row">
+                    <button onClick={() => void resolveUnsavedClose('save_and_close')}>Save and close</button>
+                    <button className="secondary" onClick={() => void resolveUnsavedClose('discard')}>Close without saving</button>
+                    <button className="secondary" onClick={() => void resolveUnsavedClose('cancel')}>Cancel</button>
+                  </div>
+                </section>
+              </div>
+            ) : null}
           </section>
         )}
 

@@ -16,6 +16,12 @@ const STATUS_META = [
   { key: 'offTrack', label: 'Off track', className: 'off-track' }
 ] as const;
 
+const TEAM_DISPLAY_META: Record<string, { teamName: string; ownerLabel: string }> = {
+  team_product: { teamName: 'Product Team', ownerLabel: 'Owner: VP Product' },
+  team_sales: { teamName: 'Sales Team', ownerLabel: 'Owner: VP Sales' },
+  team_ops: { teamName: 'Operations Team', ownerLabel: 'Owner: Head of Operations' }
+};
+
 function totalForTeam(team: TeamRollup) {
   return team.onTrack + team.atRisk + team.offTrack;
 }
@@ -28,8 +34,21 @@ function formatPercent(value: number, total: number) {
   return Math.round((value / Math.max(1, total)) * 100);
 }
 
-function formatTeamName(teamId: string) {
-  return teamId.replace(/^team_/, '').toUpperCase();
+function fallbackTeamName(teamId: string) {
+  const plain = teamId.replace(/^team_/, '').replace(/[_-]+/g, ' ').trim();
+  return plain
+    .split(' ')
+    .map((word) => word ? `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}` : '')
+    .join(' ') + ' Team';
+}
+
+function teamDisplayMeta(teamId: string): { teamName: string; ownerLabel: string } {
+  if (TEAM_DISPLAY_META[teamId]) return TEAM_DISPLAY_META[teamId];
+  return { teamName: fallbackTeamName(teamId), ownerLabel: 'Owner: Unassigned' };
+}
+
+function teamNeedsAttention(team: TeamRollup): boolean {
+  return team.offTrack > 0 || team.atRisk > 0;
 }
 
 export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
@@ -48,6 +67,15 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
     { onTrack: 0, atRisk: 0, offTrack: 0 }
   );
 
+  const sortedTeams = [...rollup.teams].sort((a, b) => {
+    if (b.offTrack !== a.offTrack) return b.offTrack - a.offTrack;
+    if (b.atRisk !== a.atRisk) return b.atRisk - a.atRisk;
+    return teamDisplayMeta(a.teamId).teamName.localeCompare(teamDisplayMeta(b.teamId).teamName);
+  });
+
+  const needsAttentionTeams = sortedTeams.filter(teamNeedsAttention);
+  const stableTeams = sortedTeams.filter((team) => !teamNeedsAttention(team));
+
   const overallTotal = Math.max(1, overallCounts.onTrack + overallCounts.atRisk + overallCounts.offTrack);
   const donutSegments = [
     { key: 'onTrack', label: 'On track', className: 'on-track', value: overallCounts.onTrack },
@@ -59,11 +87,44 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
   const donutCircumference = 2 * Math.PI * donutRadius;
   let offset = 0;
 
+  const renderTeamRow = (team: TeamRollup) => {
+    const total = Math.max(1, totalForTeam(team));
+    const meta = teamDisplayMeta(team.teamId);
+    const segments = [
+      { key: 'onTrack', label: 'On track', className: 'on-track', value: team.onTrack },
+      { key: 'atRisk', label: 'At risk', className: 'needs-attention', value: team.atRisk },
+      { key: 'offTrack', label: 'Off track', className: 'off-track', value: team.offTrack }
+    ] as const;
+
+    return (
+      <li key={team.teamId} className="leader-team-row" data-testid={`leader-team-${team.teamId}`}>
+        <div className="leader-team-row-meta">
+          <div>
+            <strong>{meta.teamName}</strong>
+            <div className="muted">{meta.ownerLabel}</div>
+            <div className="muted">{team.teamId}</div>
+          </div>
+          <span className="muted">{totalForTeam(team)} KRs</span>
+        </div>
+        <div className="leader-stack" role="img" aria-label={`${meta.teamName} ownership and health breakdown`}>
+          {segments.map((segment) => (
+            <span
+              key={segment.key}
+              className={`leader-stack-segment ${segment.className}`}
+              style={{ width: `${(segment.value / total) * 100}%` }}
+              title={`${meta.teamName} • ${segment.label}: ${segment.value} KRs (${formatPercent(segment.value, total)}%)`}
+            />
+          ))}
+        </div>
+      </li>
+    );
+  };
+
   return (
     <section className="leader-rollup-snapshot" data-testid="leader-rollup-snapshot">
       <div className="leader-rollup-header">
         <h3>Senior leader rollup snapshot</h3>
-        <p className="muted">Cross-team execution health at a glance</p>
+        <p className="muted">Cross-team execution health and ownership at a glance</p>
       </div>
 
       <div className="leader-rollup-grid">
@@ -108,36 +169,20 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
               <div className="leader-donut-center muted">{overallTotal} KRs</div>
             </div>
 
-            <ul className="leader-team-list">
-              {rollup.teams.map((team) => {
-                const total = Math.max(1, totalForTeam(team));
-                const teamName = formatTeamName(team.teamId);
-                const segments = [
-                  { key: 'onTrack', label: 'On track', className: 'on-track', value: team.onTrack },
-                  { key: 'atRisk', label: 'At risk', className: 'needs-attention', value: team.atRisk },
-                  { key: 'offTrack', label: 'Off track', className: 'off-track', value: team.offTrack }
-                ] as const;
-
-                return (
-                  <li key={team.teamId} className="leader-team-row" data-testid={`leader-team-${team.teamId}`}>
-                    <div className="leader-team-row-meta">
-                      <strong>{teamName}</strong>
-                      <span className="muted">{totalForTeam(team)} KRs</span>
-                    </div>
-                    <div className="leader-stack" role="img" aria-label={`${team.teamId} health breakdown`}>
-                      {segments.map((segment) => (
-                        <span
-                          key={segment.key}
-                          className={`leader-stack-segment ${segment.className}`}
-                          style={{ width: `${(segment.value / total) * 100}%` }}
-                          title={`${teamName} • ${segment.label}: ${segment.value} KRs (${formatPercent(segment.value, total)}%)`}
-                        />
-                      ))}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+            <div>
+              {needsAttentionTeams.length ? (
+                <>
+                  <p className="muted leader-group-label">Needs attention now</p>
+                  <ul className="leader-team-list">{needsAttentionTeams.map(renderTeamRow)}</ul>
+                </>
+              ) : null}
+              {stableTeams.length ? (
+                <>
+                  <p className="muted leader-group-label">Stable teams</p>
+                  <ul className="leader-team-list">{stableTeams.map(renderTeamRow)}</ul>
+                </>
+              ) : null}
+            </div>
           </div>
         </div>
 

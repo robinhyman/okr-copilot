@@ -7,8 +7,8 @@ import { LeaderRollupSnapshot } from './LeaderRollupSnapshot';
 test('LeaderRollupSnapshot renders donut and team segment tooltips with count and percent', () => {
   const rollup = {
     teams: [
-      { teamId: 'team_alpha', onTrack: 6, atRisk: 3, offTrack: 1 },
-      { teamId: 'team_beta', onTrack: 2, atRisk: 2, offTrack: 1 }
+      { teamId: 'team_product', onTrack: 6, atRisk: 3, offTrack: 1 },
+      { teamId: 'team_sales', onTrack: 2, atRisk: 2, offTrack: 1 }
     ],
     trend: [
       { weekStart: '2026-02-10', onTrack: 5, atRisk: 3, offTrack: 2 },
@@ -24,11 +24,13 @@ test('LeaderRollupSnapshot renders donut and team segment tooltips with count an
   assert.match(html, /<title>At risk: 5 KRs \(33%\)<\/title>/);
   assert.match(html, /<title>Off track: 2 KRs \(13%\)<\/title>/);
 
-  assert.match(html, /title="ALPHA • On track: 6 KRs \(60%\)"/);
-  assert.match(html, /title="ALPHA • At risk: 3 KRs \(30%\)"/);
-  assert.match(html, /title="ALPHA • Off track: 1 KRs \(10%\)"/);
+  assert.match(html, /Product Team/);
+  assert.match(html, /Owner: VP Product/);
+  assert.match(html, /title="Product Team • On track: 6 KRs \(60%\)"/);
 
-  assert.match(html, /title="BETA • On track: 2 KRs \(40%\)"/);
-  assert.match(html, /title="BETA • At risk: 2 KRs \(40%\)"/);
-  assert.match(html, /title="BETA • Off track: 1 KRs \(20%\)"/);
+  assert.match(html, /Sales Team/);
+  assert.match(html, /Owner: VP Sales/);
+  assert.match(html, /title="Sales Team • Off track: 1 KRs \(20%\)"/);
+
+  assert.match(html, /Needs attention now/);
 });
