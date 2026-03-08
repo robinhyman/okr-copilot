@@ -736,6 +736,74 @@ test('leader rollup returns api-sourced team display and owner labels', async ()
   assert.equal(typeof product?.ownerLabel, 'string');
 });
 
+test('finalize-now intent returns draft with assumptions and compliance metadata', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+    const sessionRes = await request(app)
+      .post('/api/okr-drafts/sessions')
+      .set(headers)
+      .send({ title: 'Finalize-now draft' });
+
+    const draftId = Number(sessionRes.body?.session?.id);
+
+    const turn = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({
+        messages: [
+          { role: 'user', content: 'Outcome: reduce onboarding drop-off. Baseline: 42%. Constraints: team of 2. Please finalize now.' }
+        ]
+      });
+
+    assert.equal(turn.status, 200);
+    assert.equal(turn.body?.mode, 'refine');
+    assert.equal(turn.body?.metadata?.draftOnRequestCompliant, true);
+    assert.ok(Array.isArray(turn.body?.metadata?.assumptions));
+    assert.ok(Array.isArray(turn.body?.draft?.keyResults));
+    assert.equal(turn.body?.draft?.keyResults?.length, 3);
+  } finally {
+    if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorKey;
+  }
+});
+
+test('save route blocks generic draft fallback when transcript has numeric evidence', async () => {
+  const app = createApp();
+  const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+  const sessionRes = await request(app)
+    .post('/api/okr-drafts/sessions')
+    .set(headers)
+    .send({ title: 'Generic-save guard draft' });
+  const draftId = Number(sessionRes.body?.session?.id);
+
+  await request(app)
+    .post(`/api/okr-drafts/${draftId}/chat`)
+    .set(headers)
+    .send({ messages: [{ role: 'user', content: 'Baseline: 20%. Target: 35% by Q3.' }] });
+
+  const saveRes = await request(app)
+    .post(`/api/okr-drafts/${draftId}/versions`)
+    .set(headers)
+    .send({
+      draft: {
+        objective: 'Define a measurable outcome for this period',
+        timeframe: 'Q3 2026',
+        keyResults: [{ title: 'Ship one measurable process improvement', targetValue: 1, currentValue: 0, unit: 'improvement' }]
+      },
+      status: 'saved'
+    });
+
+  assert.equal(saveRes.status, 201);
+  assert.equal(saveRes.body?.qualityGuards?.genericSavePrevented, true);
+  assert.equal(saveRes.body?.qualityGuards?.salvageApplied, true);
+});
+
 test('chat metadata includes loop risk diagnostics when prompts semantically repeat', async () => {
   const priorKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;

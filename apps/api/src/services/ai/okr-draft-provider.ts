@@ -22,6 +22,27 @@ export interface OkrDraftMetadata {
   loopRiskScore?: number;
   loopSignals?: string[];
   loopEscapePath?: 'assumption_synthesis' | 'multiple_choice';
+  progress?: {
+    known: string[];
+    inferred: string[];
+    missing: string[];
+    unlockItem?: string;
+  };
+  convergence?: {
+    draftOffered: boolean;
+    draftReason: 'user_requested' | 'cap_exceeded' | 'turn_budget' | 'normal';
+    draftOnRequest: boolean;
+    noDraftRateEligible?: boolean;
+  };
+  assumptions?: string[];
+  confidenceByKr?: Array<{ krIndex: number; confidence: number; reasons: string[] }>;
+  sri?: number;
+  unresolvedSlotAge?: number;
+  ttfudTurns?: number;
+  draftOnRequestCompliant?: boolean;
+  genericSavePrevented?: boolean;
+  salvageApplied?: boolean;
+  evidenceUsed?: string[];
 }
 
 export interface OkrDraftResult {
@@ -315,41 +336,122 @@ function answeredFieldMemory(messages: OkrConversationMessage[]): Record<Require
   };
 }
 
+function isFinalizeNowIntent(text: string): boolean {
+  const lower = text.toLowerCase();
+  return /(final(ise|ize)\s+now|draft\s+now|produce\s+final\s+draft|generate\s+(the\s+)?first\s+full\s+draft|final\s+draft\s+now|just\s+finali[sz]e)/.test(lower);
+}
+
+function buildProgressState(ctx: OkrCoachingContext, missingChecklist: RequiredContextField[]) {
+  const known: string[] = [];
+  const inferred: string[] = [];
+  if (ctx.outcome) known.push(`Outcome: ${ctx.outcome}`);
+  if (ctx.baseline) known.push(`Baseline: ${ctx.baseline}`);
+  if (ctx.constraints) known.push(`Constraints: ${ctx.constraints}`);
+  if (ctx.timeframe) known.push(`Timeframe: ${ctx.timeframe}`);
+  if (ctx.strategicWhy) known.push(`Why now: ${ctx.strategicWhy}`);
+
+  if (!ctx.strategicWhy && ctx.outcome) inferred.push('Strategic rationale inferred from stated outcome');
+  if (!ctx.timeframe) inferred.push('Using default quarter for provisional draft');
+
+  const missing = missingChecklist.map((field) => `${field}`);
+  return { known, inferred, missing, unlockItem: missing[0] };
+}
+
+function estimateSRI(messages: OkrConversationMessage[]): number {
+  const assistant = messages.filter((m) => m.role === 'assistant').map((m) => m.content);
+  if (assistant.length < 2) return 0;
+  const recent = assistant.slice(-4);
+  let total = 0;
+  let pairs = 0;
+  for (let i = 1; i < recent.length; i += 1) {
+    total += jaccardSimilarity(recent[i - 1], recent[i]);
+    pairs += 1;
+  }
+  return pairs ? Math.round((total / pairs) * 1000) / 1000 : 0;
+}
+
+function draftLooksGeneric(draft: OkrDraft): boolean {
+  const objective = draft.objective.toLowerCase();
+  const firstKr = draft.keyResults[0]?.title?.toLowerCase() ?? '';
+  return objective.includes('define a measurable outcome') || objective.includes('improve strategic performance') || firstKr.includes('process improvement');
+}
+
+function buildDraftWithAssumptions(baseDraft: OkrDraft, ctx: OkrCoachingContext): OkrDraft {
+  const timeframe = ctx.timeframe || baseDraft.timeframe || DEFAULT_TIMEFRAME;
+  const objective = ctx.outcome
+    ? `Improve ${ctx.outcome.toLowerCase()} in order to deliver measurable business impact`
+    : 'Improve priority business outcomes in order to deliver measurable business impact';
+  const baselineNum = parseBaselineNumber(ctx.baseline || '0', 0);
+  const unit = parseUnit(`${ctx.baseline || ''} ${ctx.outcome || ''}`);
+
+  const krs = [
+    { title: `Lagging: Increase core outcome from ${baselineNum} to ${Math.round((baselineNum || 10) * 1.2)} by ${timeframe}`, currentValue: baselineNum, targetValue: Math.round((baselineNum || 10) * 1.2), unit },
+    { title: `Leading: Improve leading indicator from ${Math.max(1, Math.round((baselineNum || 10) * 0.8))} to ${Math.max(2, Math.round((baselineNum || 10) * 1.05))} by ${timeframe}`, currentValue: Math.max(1, Math.round((baselineNum || 10) * 0.8)), targetValue: Math.max(2, Math.round((baselineNum || 10) * 1.05)), unit },
+    { title: `Guardrail: Keep quality risk metric from ${Math.max(1, Math.round((baselineNum || 10) * 0.3))} to <= ${Math.max(1, Math.round((baselineNum || 10) * 0.35))} by ${timeframe}`, currentValue: Math.max(1, Math.round((baselineNum || 10) * 0.3)), targetValue: Math.max(1, Math.round((baselineNum || 10) * 0.35)), unit }
+  ];
+
+  return normalizeDraftShape({ objective, timeframe, keyResults: krs }, timeframe);
+}
+
 function applyLoopMitigation(input: OkrConversationRequest, result: OkrConversationResult): OkrConversationResult {
   const safeMessages = sanitizeMessages(input.messages);
   const assistantHistory = safeMessages.filter((m) => m.role === 'assistant').map((m) => m.content);
   const recentAssistants = assistantHistory.slice(-4);
   const previousAssistant = recentAssistants[recentAssistants.length - 1] || '';
+  const lastUserText = [...safeMessages].reverse().find((m) => m.role === 'user')?.content ?? '';
 
   const proposedTheme = classifyPromptTheme(result.assistantMessage);
   const previousTheme = classifyPromptTheme(previousAssistant);
   const sameThemeRepeat = proposedTheme !== 'other' && proposedTheme === previousTheme;
   const highSimilarity = previousAssistant ? jaccardSimilarity(previousAssistant, result.assistantMessage) >= 0.62 : false;
-  const recentQuestionTurns = safeMessages.slice(-8).filter((m, idx, arr) => m.role === 'assistant' && idx >= arr.length - 8).length;
+  const recentQuestionTurns = safeMessages.slice(-8).filter((m) => m.role === 'assistant').length;
   const answeredMemory = answeredFieldMemory(safeMessages);
   const missingFields = (result.missingContext ?? []).map((field) => field === 'target_value' ? 'target' : field) as RequiredContextField[];
   const missingButAnswered = missingFields.filter((field) => answeredMemory[field]);
+
+  const askCountForTheme = proposedTheme === 'other'
+    ? 0
+    : assistantHistory.filter((text) => classifyPromptTheme(text) === proposedTheme).length;
+  const capExceeded = proposedTheme !== 'other' && askCountForTheme >= 2 && result.mode === 'questions';
 
   const signals: string[] = [];
   if (sameThemeRepeat) signals.push('same_theme_repeat');
   if (highSimilarity) signals.push('semantic_repeat');
   if (recentQuestionTurns >= 3 && result.mode === 'questions') signals.push('question_streak');
   if (missingButAnswered.length > 0) signals.push('answered_field_still_missing');
+  if (capExceeded) signals.push('slot_cap_exceeded');
 
   const loopRiskScore = Math.min(1, signals.length / 3 + (result.mode === 'questions' ? 0.2 : 0));
-  const loopDetected = loopRiskScore >= 0.5;
+  const loopDetected = loopRiskScore >= 0.5 || capExceeded;
 
-  if (loopDetected && result.mode === 'questions' && (recentQuestionTurns >= 4 || loopRiskScore >= 0.8)) {
-    const draftWithAssumptions = normalizeDraftShape(result.draft, input.timeframe || DEFAULT_TIMEFRAME);
-    if (!draftWithAssumptions.objective || draftWithAssumptions.objective === 'Define a measurable outcome for this period') {
-      draftWithAssumptions.objective = 'Improve strategic performance with explicit assumptions';
-    }
+  const inferredContext = extractCoachingContext(safeMessages, input.timeframe || DEFAULT_TIMEFRAME);
+  const targetIntent = extractTargetIntent(safeMessages);
+  const missingChecklist = getMissingChecklist(inferredContext, targetIntent);
+  const progress = buildProgressState(inferredContext, missingChecklist);
+  const sri = estimateSRI(safeMessages);
+  const unresolvedSlotAge = missingChecklist.length ? Math.max(1, recentQuestionTurns) : 0;
+  const ttfudTurns = safeMessages.filter((m) => m.role === 'user').length;
+  const finalizeNow = isFinalizeNowIntent(lastUserText);
+  const shouldForceDraft = finalizeNow || capExceeded || (ttfudTurns >= 6 && result.mode === 'questions');
+
+  if (shouldForceDraft) {
+    const draftWithAssumptions = buildDraftWithAssumptions(normalizeDraftShape(result.draft, input.timeframe || DEFAULT_TIMEFRAME), inferredContext);
+    const assumptions = [
+      inferredContext.timeframe ? `Using timeframe ${inferredContext.timeframe}` : 'Using default quarter timeframe',
+      inferredContext.constraints ? `Assuming constraints remain: ${inferredContext.constraints}` : 'Assuming current team capacity and budget constraints',
+      missingChecklist.length ? `Missing slots treated as provisional: ${missingChecklist.join(', ')}` : 'No critical missing slots'
+    ];
 
     return {
       ...result,
       mode: 'refine',
       questions: [],
-      assistantMessage: normalizeAssistantMessage('I have enough to draft with assumptions so we can move forward. I’ll mark gaps as TBD and you can refine directly.'),
+      rationale: [
+        ...(result.rationale ?? []),
+        `Assumptions: ${assumptions.join(' | ')}`,
+        `TBD validation plan: confirm ${missingChecklist.slice(0, 2).join(' and ') || 'metric definitions'} in first two weeks.`
+      ].slice(0, 5),
+      assistantMessage: normalizeAssistantMessage('Drafting now with explicit assumptions so you can finalize. I marked TBDs for anything missing.'),
       draft: draftWithAssumptions,
       metadata: {
         ...result.metadata,
@@ -357,7 +459,24 @@ function applyLoopMitigation(input: OkrConversationRequest, result: OkrConversat
         loopStage: 'assumption_synthesis',
         loopRiskScore,
         loopSignals: signals,
-        loopEscapePath: 'assumption_synthesis'
+        loopEscapePath: 'assumption_synthesis',
+        progress,
+        assumptions,
+        confidenceByKr: [
+          { krIndex: 0, confidence: 0.7, reasons: ['numeric baseline present'] },
+          { krIndex: 1, confidence: 0.6, reasons: ['leading metric inferred'] },
+          { krIndex: 2, confidence: 0.55, reasons: ['guardrail metric provisional'] }
+        ],
+        convergence: {
+          draftOffered: true,
+          draftReason: finalizeNow ? 'user_requested' : capExceeded ? 'cap_exceeded' : 'turn_budget',
+          draftOnRequest: finalizeNow,
+          noDraftRateEligible: true
+        },
+        sri,
+        unresolvedSlotAge,
+        ttfudTurns,
+        draftOnRequestCompliant: finalizeNow
       }
     };
   }
@@ -365,14 +484,24 @@ function applyLoopMitigation(input: OkrConversationRequest, result: OkrConversat
   if (loopDetected && result.mode === 'questions' && missingFields[0]) {
     return {
       ...result,
-      assistantMessage: normalizeAssistantMessage(`${missingFieldQuestion(missingFields[0])} Choose one: A) quick estimate B) exact metric C) proceed with assumption.`),
+      assistantMessage: normalizeAssistantMessage(`Here’s what I heard so far. ${missingFieldQuestion(missingFields[0])} Choose one: A) quick estimate B) exact metric C) draft with assumptions now.`),
       metadata: {
         ...result.metadata,
         loopDetected: true,
         loopStage: 'multiple_choice',
         loopRiskScore,
         loopSignals: signals,
-        loopEscapePath: 'multiple_choice'
+        loopEscapePath: 'multiple_choice',
+        progress,
+        convergence: {
+          draftOffered: false,
+          draftReason: 'normal',
+          draftOnRequest: false,
+          noDraftRateEligible: true
+        },
+        sri,
+        unresolvedSlotAge,
+        ttfudTurns
       }
     };
   }
@@ -384,7 +513,17 @@ function applyLoopMitigation(input: OkrConversationRequest, result: OkrConversat
       loopDetected,
       loopStage: loopDetected ? 'detected' : 'none',
       loopRiskScore,
-      loopSignals: signals
+      loopSignals: signals,
+      progress,
+      convergence: {
+        draftOffered: result.mode === 'refine',
+        draftReason: 'normal',
+        draftOnRequest: false,
+        noDraftRateEligible: true
+      },
+      sri,
+      unresolvedSlotAge,
+      ttfudTurns
     }
   };
 }

@@ -25,6 +25,12 @@ type ChatTurnMetadata = {
   loopRiskScore?: number;
   loopSignals?: string[];
   loopEscapePath?: string;
+  progress?: { known?: string[]; inferred?: string[]; missing?: string[]; unlockItem?: string };
+  assumptions?: string[];
+  sri?: number;
+  unresolvedSlotAge?: number;
+  ttfudTurns?: number;
+  draftOnRequestCompliant?: boolean;
 };
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string; metadata?: ChatTurnMetadata };
@@ -425,7 +431,13 @@ export function App() {
             loopStage: response.metadata?.loopStage,
             loopRiskScore: response.metadata?.loopRiskScore,
             loopSignals: response.metadata?.loopSignals,
-            loopEscapePath: response.metadata?.loopEscapePath
+            loopEscapePath: response.metadata?.loopEscapePath,
+            progress: response.metadata?.progress,
+            assumptions: response.metadata?.assumptions,
+            sri: response.metadata?.sri,
+            unresolvedSlotAge: response.metadata?.unresolvedSlotAge,
+            ttfudTurns: response.metadata?.ttfudTurns,
+            draftOnRequestCompliant: response.metadata?.draftOnRequestCompliant
           }
         }
       ]);
@@ -439,7 +451,11 @@ export function App() {
         fallback_reason: response.metadata?.reason ?? null,
         loop_detected: Boolean(response.metadata?.loopDetected),
         loop_stage: response.metadata?.loopStage ?? null,
-        loop_risk_score: response.metadata?.loopRiskScore ?? null
+        loop_risk_score: response.metadata?.loopRiskScore ?? null,
+        sri: response.metadata?.sri ?? null,
+        unresolved_slot_age: response.metadata?.unresolvedSlotAge ?? null,
+        ttfud_turns: response.metadata?.ttfudTurns ?? null,
+        draft_on_request_compliant: response.metadata?.draftOnRequestCompliant ?? null
       });
       if (response.metadata?.loopDetected) {
         void trackUiEvent('coach_loop_detected', {
@@ -670,6 +686,13 @@ export function App() {
                             <li key={idx}>
                               <strong>{m.role === 'assistant' ? 'Coach' : 'You'}:</strong> {m.content}
                               {turnStatus ? <div className="muted">{turnStatus}</div> : null}
+                              {m.metadata?.progress ? (
+                                <div className="muted">
+                                  Known: {(m.metadata.progress.known ?? []).length} · Inferred: {(m.metadata.progress.inferred ?? []).length} · Missing: {(m.metadata.progress.missing ?? []).length}
+                                  {m.metadata.progress.unlockItem ? ` · Next unlock: ${m.metadata.progress.unlockItem}` : ''}
+                                </div>
+                              ) : null}
+                              {m.metadata?.loopEscapePath ? <div className="muted">Loop recovery: {m.metadata.loopEscapePath}</div> : null}
                             </li>
                           );
                         })}

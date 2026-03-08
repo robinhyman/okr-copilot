@@ -62,8 +62,12 @@ test('create flow seed message is backend-oriented and does not inject old stati
   assert.notEqual(seed, 'What specific business outcome should this OKR move?');
 });
 
-test('formatTurnStatus surfaces metadata source and fallback reason', () => {
+test('formatTurnStatus surfaces metadata source, fallback reason, and diagnostics', () => {
   assert.equal(formatTurnStatus({ source: 'llm' }), 'source: llm');
   assert.equal(formatTurnStatus({ source: 'fallback', reason: 'llm_timeout' }), 'source: fallback (llm_timeout)');
+  assert.equal(
+    formatTurnStatus({ source: 'llm', sri: 0.31, unresolvedSlotAge: 2, ttfudTurns: 4 }),
+    'source: llm · SRI 0.31 · slot-age 2 · TTFUD 4'
+  );
 });
 

@@ -1,12 +1,26 @@
 type ChatTurnMetadata = {
   source?: 'llm' | 'fallback';
   reason?: string;
+  sri?: number;
+  unresolvedSlotAge?: number;
+  ttfudTurns?: number;
 };
 
 export function formatTurnStatus(metadata?: ChatTurnMetadata): string {
   if (!metadata?.source) return '';
-  if (metadata.source === 'llm') return 'source: llm';
-  return metadata.reason ? `source: fallback (${metadata.reason})` : 'source: fallback';
+  const sourceText = metadata.source === 'llm'
+    ? 'source: llm'
+    : metadata.reason
+      ? `source: fallback (${metadata.reason})`
+      : 'source: fallback';
+
+  const diagnostics = [
+    metadata.sri != null ? `SRI ${metadata.sri}` : null,
+    metadata.unresolvedSlotAge != null ? `slot-age ${metadata.unresolvedSlotAge}` : null,
+    metadata.ttfudTurns != null ? `TTFUD ${metadata.ttfudTurns}` : null
+  ].filter(Boolean);
+
+  return diagnostics.length ? `${sourceText} · ${diagnostics.join(' · ')}` : sourceText;
 }
 
 export function buildCreateFlowSeedMessage(teamId: string): string {
