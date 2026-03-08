@@ -1,4 +1,12 @@
-type TeamRollup = { teamId: string; onTrack: number; atRisk: number; offTrack: number };
+type TeamRollup = {
+  teamId: string;
+  teamDisplayName?: string;
+  ownerDisplayName?: string | null;
+  ownerLabel?: string;
+  onTrack: number;
+  atRisk: number;
+  offTrack: number;
+};
 type WeeklyRollup = { weekStart: string; onTrack: number; atRisk: number; offTrack: number };
 
 type LeaderRollup = {
@@ -16,11 +24,6 @@ const STATUS_META = [
   { key: 'offTrack', label: 'Off track', className: 'off-track' }
 ] as const;
 
-const TEAM_DISPLAY_META: Record<string, { teamName: string; ownerLabel: string }> = {
-  team_product: { teamName: 'Product Team', ownerLabel: 'Owner: VP Product' },
-  team_sales: { teamName: 'Sales Team', ownerLabel: 'Owner: VP Sales' },
-  team_ops: { teamName: 'Operations Team', ownerLabel: 'Owner: Head of Operations' }
-};
 
 function totalForTeam(team: TeamRollup) {
   return team.onTrack + team.atRisk + team.offTrack;
@@ -42,9 +45,11 @@ function fallbackTeamName(teamId: string) {
     .join(' ') + ' Team';
 }
 
-function teamDisplayMeta(teamId: string): { teamName: string; ownerLabel: string } {
-  if (TEAM_DISPLAY_META[teamId]) return TEAM_DISPLAY_META[teamId];
-  return { teamName: fallbackTeamName(teamId), ownerLabel: 'Owner: Unassigned' };
+function teamDisplayMeta(team: TeamRollup): { teamName: string; ownerLabel: string } {
+  const teamName = team.teamDisplayName?.trim() || fallbackTeamName(team.teamId);
+  const ownerLabel = team.ownerLabel?.trim()
+    || (team.ownerDisplayName?.trim() ? `Owner: ${team.ownerDisplayName.trim()}` : 'Owner: Unassigned');
+  return { teamName, ownerLabel };
 }
 
 function teamNeedsAttention(team: TeamRollup): boolean {
@@ -70,7 +75,7 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
   const sortedTeams = [...rollup.teams].sort((a, b) => {
     if (b.offTrack !== a.offTrack) return b.offTrack - a.offTrack;
     if (b.atRisk !== a.atRisk) return b.atRisk - a.atRisk;
-    return teamDisplayMeta(a.teamId).teamName.localeCompare(teamDisplayMeta(b.teamId).teamName);
+    return teamDisplayMeta(a).teamName.localeCompare(teamDisplayMeta(b).teamName);
   });
 
   const needsAttentionTeams = sortedTeams.filter(teamNeedsAttention);
@@ -89,7 +94,7 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
 
   const renderTeamRow = (team: TeamRollup) => {
     const total = Math.max(1, totalForTeam(team));
-    const meta = teamDisplayMeta(team.teamId);
+    const meta = teamDisplayMeta(team);
     const segments = [
       { key: 'onTrack', label: 'On track', className: 'on-track', value: team.onTrack },
       { key: 'atRisk', label: 'At risk', className: 'needs-attention', value: team.atRisk },

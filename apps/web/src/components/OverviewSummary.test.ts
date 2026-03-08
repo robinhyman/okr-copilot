@@ -31,6 +31,9 @@ test('OverviewSummary renders grouped objective sections with objective and KR g
       id: 1,
       objective: 'Grow pipeline',
       timeframe: 'Q2',
+      teamId: 'team_sales',
+      teamName: 'Sales Team',
+      ownerLabel: 'Owner: VP Sales',
       keyResults: [
         { id: 11, title: 'Book intros', currentValue: 3, targetValue: 10, unit: 'calls' },
         { id: 12, title: 'Ship proposals', currentValue: 5, targetValue: 10, unit: 'proposals' }
@@ -40,11 +43,17 @@ test('OverviewSummary renders grouped objective sections with objective and KR g
       id: 2,
       objective: 'Retention',
       timeframe: 'Q2',
+      teamId: 'team_product',
+      teamName: 'Product Team',
+      ownerLabel: 'Owner: VP Product',
       keyResults: [{ id: 21, title: 'NPS', currentValue: 40, targetValue: 50, unit: 'score' }]
     }
   ]);
 
-  const html = renderToStaticMarkup(createElement(OverviewSummary, { metrics }));
+  const html = renderToStaticMarkup(createElement(OverviewSummary, { metrics, role: 'senior_leader' }));
+  assert.match(html, /Sales Team/);
+  assert.match(html, /Owner: VP Sales/);
+  assert.match(html, /Product Team/);
   assert.match(html, /Grow pipeline/);
   assert.match(html, /Book intros/);
   assert.match(html, /data-testid="objective-progress-1"/);

@@ -7,8 +7,8 @@ import { LeaderRollupSnapshot } from './LeaderRollupSnapshot';
 test('LeaderRollupSnapshot renders donut and team segment tooltips with count and percent', () => {
   const rollup = {
     teams: [
-      { teamId: 'team_product', onTrack: 6, atRisk: 3, offTrack: 1 },
-      { teamId: 'team_sales', onTrack: 2, atRisk: 2, offTrack: 1 }
+      { teamId: 'team_product', teamDisplayName: 'Product Team', ownerDisplayName: 'VP Product', onTrack: 6, atRisk: 3, offTrack: 1 },
+      { teamId: 'team_sales', teamDisplayName: 'Sales Team', ownerDisplayName: 'VP Sales', onTrack: 2, atRisk: 2, offTrack: 1 }
     ],
     trend: [
       { weekStart: '2026-02-10', onTrack: 5, atRisk: 3, offTrack: 2 },

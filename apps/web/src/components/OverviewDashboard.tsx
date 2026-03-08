@@ -26,7 +26,7 @@ type ManagerDigest = {
 };
 
 type LeaderRollup = {
-  teams: Array<{ teamId: string; onTrack: number; atRisk: number; offTrack: number }>;
+  teams: Array<{ teamId: string; teamDisplayName?: string; ownerDisplayName?: string | null; ownerLabel?: string; onTrack: number; atRisk: number; offTrack: number }>;
   trend: Array<{ weekStart: string; onTrack: number; atRisk: number; offTrack: number }>;
 };
 
@@ -47,7 +47,7 @@ export function OverviewDashboard({ role, metrics, managerDigest, leaderRollup, 
 
       {role === 'senior_leader' && leaderRollup ? <LeaderRollupSnapshot rollup={leaderRollup} /> : null}
 
-      <OverviewSummary metrics={metrics} onRequestKrCheckin={onRequestKrCheckin} />
+      <OverviewSummary role={role} metrics={metrics} onRequestKrCheckin={onRequestKrCheckin} />
     </section>
   );
 }

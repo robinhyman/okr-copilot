@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { getRoutePath, type RoutePath } from './lib/ui';
 import { deriveCoachUiState, publishButtonEnabled } from './lib/conversationFlow';
 import { buildGroupedOverviewMetrics } from './lib/overviewMetrics';
@@ -9,6 +9,9 @@ type ApiOkr = {
   id: number;
   objective: string;
   timeframe: string;
+  team_id?: string;
+  team_name?: string;
+  owner_display_name?: string;
   keyResults: Array<{ id: number; title: string; target_value: number; current_value: number; unit: string }>;
 };
 
@@ -17,6 +20,11 @@ type ChatTurnMetadata = {
   provider?: 'openai' | 'deterministic';
   reason?: string;
   mode?: 'questions' | 'refine';
+  loopDetected?: boolean;
+  loopStage?: string;
+  loopRiskScore?: number;
+  loopSignals?: string[];
+  loopEscapePath?: string;
 };
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string; metadata?: ChatTurnMetadata };
@@ -42,7 +50,7 @@ type ManagerDigest = {
 };
 
 type LeaderRollup = {
-  teams: Array<{ teamId: string; onTrack: number; atRisk: number; offTrack: number }>;
+  teams: Array<{ teamId: string; teamDisplayName?: string; ownerDisplayName?: string | null; ownerLabel?: string; onTrack: number; atRisk: number; offTrack: number }>;
   trend: Array<{ weekStart: string; onTrack: number; atRisk: number; offTrack: number }>;
 };
 
@@ -126,6 +134,7 @@ export function App() {
   const [activeDraft, setActiveDraft] = useState<DraftPayload | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [isComposingInput, setIsComposingInput] = useState(false);
   const [coachPrompts, setCoachPrompts] = useState<string[]>([]);
   const [status, setStatus] = useState('');
   const [isCoachModalOpen, setIsCoachModalOpen] = useState(false);
@@ -169,6 +178,9 @@ export function App() {
           id: okr.id,
           objective: okr.objective,
           timeframe: okr.timeframe,
+          teamId: okr.team_id,
+          teamName: okr.team_name,
+          ownerLabel: okr.owner_display_name ? `Owner: ${okr.owner_display_name}` : undefined,
           keyResults: okr.keyResults.map((kr) => ({
             id: kr.id,
             title: kr.title,
@@ -408,7 +420,12 @@ export function App() {
             source: response.metadata?.source,
             provider: response.metadata?.provider,
             reason: response.metadata?.reason,
-            mode: response.mode
+            mode: response.mode,
+            loopDetected: response.metadata?.loopDetected,
+            loopStage: response.metadata?.loopStage,
+            loopRiskScore: response.metadata?.loopRiskScore,
+            loopSignals: response.metadata?.loopSignals,
+            loopEscapePath: response.metadata?.loopEscapePath
           }
         }
       ]);
@@ -419,8 +436,25 @@ export function App() {
         flow: 'conversational',
         latency_ms: turnLatencyMs,
         source: response.metadata?.source,
-        fallback_reason: response.metadata?.reason ?? null
+        fallback_reason: response.metadata?.reason ?? null,
+        loop_detected: Boolean(response.metadata?.loopDetected),
+        loop_stage: response.metadata?.loopStage ?? null,
+        loop_risk_score: response.metadata?.loopRiskScore ?? null
       });
+      if (response.metadata?.loopDetected) {
+        void trackUiEvent('coach_loop_detected', {
+          flow: 'conversational',
+          loop_stage: response.metadata?.loopStage ?? 'detected',
+          loop_risk_score: response.metadata?.loopRiskScore ?? null,
+          loop_signals: response.metadata?.loopSignals ?? []
+        });
+      }
+      if (response.metadata?.loopEscapePath) {
+        void trackUiEvent('coach_loop_escape_path', {
+          flow: 'conversational',
+          escape_path: response.metadata?.loopEscapePath
+        });
+      }
       void loadDrafts();
     } catch (error: any) {
       setStatus(`Coach response failed: ${error?.message ?? 'unknown error'}`);
@@ -547,6 +581,26 @@ export function App() {
     ? Math.max(0, Math.round(modalOpenRef.current - sessionStartRef.current))
     : null;
   const thinkingElapsedSeconds = coachThinkingSinceMs ? Math.max(0, Math.floor((Date.now() - coachThinkingSinceMs) / 1000)) : null;
+  const suggestedChips = [
+    ...(coachPrompts.slice(0, 2)),
+    'Generate the first full draft now.',
+    ...(activeDraft?.keyResults?.length ? ['Make KRs more measurable.'] : [])
+  ].filter((chip, index, all) => all.indexOf(chip) === index).slice(0, 3);
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter') return;
+    if (isComposingInput || event.nativeEvent.isComposing) return;
+    if (event.shiftKey) {
+      void trackUiEvent('chat_shift_enter_newline_used', { flow: currentMode });
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || !event.shiftKey) {
+      event.preventDefault();
+      if (isCoachThinking || isStartingCoachSession || !chatInput.trim()) return;
+      void trackUiEvent('chat_enter_send_used', { flow: currentMode, input_length: chatInput.trim().length });
+      void sendChatTurn();
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -631,12 +685,33 @@ export function App() {
                           </li>
                         )}
                       </ul>
+                      {(!isCoachThinking && !isStartingCoachSession && suggestedChips.length) ? (
+                        <div className="row" style={{ flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                          {suggestedChips.map((chip) => (
+                            <button
+                              key={chip}
+                              type="button"
+                              className="secondary"
+                              onClick={() => {
+                                void trackUiEvent('suggested_chip_clicked', { chip_text: chip, flow: currentMode });
+                                void sendChatTurn(chip);
+                              }}
+                            >
+                              {chip}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="row">
-                        <input
+                        <textarea
                           value={chatInput}
+                          rows={3}
                           disabled={isCoachThinking || isStartingCoachSession}
                           placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Reply or ask for changes…'}
                           onChange={(e) => setChatInput(e.target.value)}
+                          onKeyDown={handleComposerKeyDown}
+                          onCompositionStart={() => setIsComposingInput(true)}
+                          onCompositionEnd={() => setIsComposingInput(false)}
                         />
                         <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
                       </div>
@@ -652,12 +727,7 @@ export function App() {
                             ? 'You’re on track — use a shortcut or reply to coach.'
                             : 'Tip: answer one more coach question to unlock draft preview.'}
                       </p>
-                      <div className="row">
-                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
-                        {activeDraft?.keyResults?.length ? (
-                          <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
-                        ) : null}
-                      </div>
+                      <p className="muted">Use the suggested chips above the composer for quick actions.</p>
                     </div>
 
                     <div className="panel nested wizard-output-panel" aria-live="polite">

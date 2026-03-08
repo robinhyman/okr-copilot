@@ -1,6 +1,7 @@
 import type { KrStatus, OverviewMetrics } from '../lib/overviewMetrics';
 
 type OverviewSummaryProps = {
+  role?: 'manager' | 'team_member' | 'senior_leader';
   metrics: OverviewMetrics;
   onRequestKrCheckin?: (input: { krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string }) => void;
 };
@@ -36,7 +37,7 @@ function ProgressBar({
   );
 }
 
-export function OverviewSummary({ metrics, onRequestKrCheckin }: OverviewSummaryProps) {
+export function OverviewSummary({ role = 'manager', metrics, onRequestKrCheckin }: OverviewSummaryProps) {
   if (!metrics.totalKrs) {
     return (
       <section className="panel nested" data-testid="overview-summary-empty">
@@ -49,6 +50,26 @@ export function OverviewSummary({ metrics, onRequestKrCheckin }: OverviewSummary
   const radius = 44;
   const circumference = 2 * Math.PI * radius;
   const progressOffset = circumference - (metrics.overallProgressPercent / 100) * circumference;
+
+  const groupedByTeam = metrics.byObjective.reduce((acc, objective) => {
+    const teamId = objective.teamId || 'team_unknown';
+    const existing = acc.get(teamId);
+    if (existing) {
+      existing.objectives.push(objective);
+      return acc;
+    }
+    acc.set(teamId, {
+      teamId,
+      teamName: objective.teamName || teamId,
+      ownerLabel: objective.ownerLabel || 'Owner: Unassigned',
+      objectives: [objective]
+    });
+    return acc;
+  }, new Map<string, { teamId: string; teamName: string; ownerLabel: string; objectives: typeof metrics.byObjective }>());
+
+  const objectiveGroups = role === 'senior_leader'
+    ? Array.from(groupedByTeam.values()).sort((a, b) => a.teamName.localeCompare(b.teamName))
+    : [{ teamId: 'all', teamName: '', ownerLabel: '', objectives: metrics.byObjective }];
 
   return (
     <section className="panel nested" data-testid="overview-summary">
@@ -117,76 +138,86 @@ export function OverviewSummary({ metrics, onRequestKrCheckin }: OverviewSummary
         <p className="muted">Each objective shows its overall progress and KR contributors.</p>
       </div>
 
-      <div className="objective-summary-grid" data-testid="grouped-objective-summary">
-        {metrics.byObjective.map((objective) => {
-          const atRiskCount = objective.keyResults.filter((kr) => kr.status !== 'on-track').length;
+      {objectiveGroups.map((group) => (
+        <section key={group.teamId} data-testid={`objective-team-group-${group.teamId}`}>
+          {role === 'senior_leader' ? (
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <h4>{group.teamName}</h4>
+              <p className="muted">{group.ownerLabel} · {group.teamId}</p>
+            </div>
+          ) : null}
+          <div className="objective-summary-grid" data-testid="grouped-objective-summary">
+            {group.objectives.map((objective) => {
+              const atRiskCount = objective.keyResults.filter((kr) => kr.status !== 'on-track').length;
 
-          return (
-            <article className="objective-summary-card" key={objective.id || objective.objective} data-testid={`objective-card-${objective.id}`}>
-              <header className="objective-summary-header">
-                <h4>{objective.objective}</h4>
-                <p className="muted">{objective.timeframe || 'No timeframe'}</p>
-              </header>
+              return (
+                <article className="objective-summary-card" key={objective.id || objective.objective} data-testid={`objective-card-${objective.id}`}>
+                  <header className="objective-summary-header">
+                    <h4>{objective.objective}</h4>
+                    <p className="muted">{objective.timeframe || 'No timeframe'}</p>
+                  </header>
 
-              <div className="objective-meta-row muted">
-                <span>{objective.timeframe || 'No timeframe set'}</span>
-                <span>{objective.keyResults.length} KRs</span>
-                <span>{atRiskCount} at risk</span>
-              </div>
+                  <div className="objective-meta-row muted">
+                    <span>{objective.timeframe || 'No timeframe set'}</span>
+                    <span>{objective.keyResults.length} KRs</span>
+                    <span>{atRiskCount} at risk</span>
+                  </div>
 
-              <div className="objective-progress-block">
-                <p className="objective-progress-label">Objective progress</p>
-                <ProgressBar
-                  value={objective.progressPercent}
-                  label={`${objective.objective} objective progress`}
-                  testId={`objective-progress-${objective.id}`}
-                  tone="objective"
-                  thickness="objective"
-                />
-              </div>
+                  <div className="objective-progress-block">
+                    <p className="objective-progress-label">Objective progress</p>
+                    <ProgressBar
+                      value={objective.progressPercent}
+                      label={`${objective.objective} objective progress`}
+                      testId={`objective-progress-${objective.id}`}
+                      tone="objective"
+                      thickness="objective"
+                    />
+                  </div>
 
-              <div className="kr-contribution-block" data-testid={`objective-${objective.id}-kr-contributors`}>
-                <p className="kr-contribution-title">Key result contributors</p>
-                <ul className="kr-visual-list">
-                  {objective.keyResults.map((kr) => (
-                    <li key={kr.id} data-testid={`objective-${objective.id}-kr-${kr.id}`}>
-                      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span className="kr-title" title={kr.title}>{kr.title}</span>
-                        <button
-                          type="button"
-                          className="secondary kr-checkin-trigger"
-                          aria-label={`Check in for ${kr.title}`}
-                          title="Check in"
-                          onClick={() => onRequestKrCheckin?.({
-                            krId: kr.id,
-                            krTitle: kr.title,
-                            objective: objective.objective,
-                            currentValue: kr.currentValue,
-                            targetValue: kr.targetValue,
-                            unit: kr.unit
-                          })}
-                        >
-                          <span aria-hidden="true">📝</span>
-                          <span className="kr-checkin-label">Check in</span>
-                        </button>
-                      </div>
-                      <ProgressBar
-                        value={kr.progressPercent}
-                        label={`${kr.title} progress`}
-                        testId={`kr-progress-${objective.id}-${kr.id}`}
-                        tone={kr.status}
-                      />
-                      <span className="muted">
-                        {kr.currentValue}/{kr.targetValue} {kr.unit}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </article>
-          );
-        })}
-      </div>
+                  <div className="kr-contribution-block" data-testid={`objective-${objective.id}-kr-contributors`}>
+                    <p className="kr-contribution-title">Key result contributors</p>
+                    <ul className="kr-visual-list">
+                      {objective.keyResults.map((kr) => (
+                        <li key={kr.id} data-testid={`objective-${objective.id}-kr-${kr.id}`}>
+                          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span className="kr-title" title={kr.title}>{kr.title}</span>
+                            <button
+                              type="button"
+                              className="secondary kr-checkin-trigger"
+                              aria-label={`Check in for ${kr.title}`}
+                              title="Check in"
+                              onClick={() => onRequestKrCheckin?.({
+                                krId: kr.id,
+                                krTitle: kr.title,
+                                objective: objective.objective,
+                                currentValue: kr.currentValue,
+                                targetValue: kr.targetValue,
+                                unit: kr.unit
+                              })}
+                            >
+                              <span aria-hidden="true">📝</span>
+                              <span className="kr-checkin-label">Check in</span>
+                            </button>
+                          </div>
+                          <ProgressBar
+                            value={kr.progressPercent}
+                            label={`${kr.title} progress`}
+                            testId={`kr-progress-${objective.id}-${kr.id}`}
+                            tone={kr.status}
+                          />
+                          <span className="muted">
+                            {kr.currentValue}/{kr.targetValue} {kr.unit}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ))}
     </section>
   );
 }

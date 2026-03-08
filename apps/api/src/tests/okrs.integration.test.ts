@@ -712,6 +712,70 @@ test('missing-context prompts are explicit and field-specific', async () => {
   }
 });
 
+test('leader rollup returns api-sourced team display and owner labels', async () => {
+  const app = createApp();
+
+  await request(app)
+    .post('/api/okrs')
+    .set({ ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' })
+    .send({
+      objective: 'Improve product reliability',
+      timeframe: 'Q2 2026',
+      keyResults: [{ title: 'Reduce incidents', targetValue: 2, currentValue: 1, unit: 'incidents' }]
+    });
+
+  const res = await request(app)
+    .get('/api/leader/rollup')
+    .set({ ...authHeaders, 'x-auth-user-id': 'leader_exec', 'x-auth-team-id': 'team_product' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body?.ok, true);
+  assert.ok(Array.isArray(res.body?.rollup?.teams));
+  const product = res.body?.rollup?.teams?.find((team: any) => team.teamId === 'team_product');
+  assert.equal(product?.teamDisplayName, 'Product');
+  assert.equal(typeof product?.ownerLabel, 'string');
+});
+
+test('chat metadata includes loop risk diagnostics when prompts semantically repeat', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+    const sessionRes = await request(app)
+      .post('/api/okr-drafts/sessions')
+      .set(headers)
+      .send({ title: 'Loop diagnostics draft' });
+
+    const draftId = Number(sessionRes.body?.session?.id);
+
+    const turn1 = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({ messages: [{ role: 'user', content: 'Help me improve delivery.' }] });
+
+    const turn2 = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({
+        messages: [
+          { role: 'user', content: 'Help me improve delivery.' },
+          { role: 'assistant', content: turn1.body?.assistantMessage || '' },
+          { role: 'user', content: 'Still help me improve delivery.' }
+        ]
+      });
+
+    assert.equal(turn2.status, 200);
+    assert.equal(typeof turn2.body?.metadata?.loopRiskScore, 'number');
+    assert.ok(Array.isArray(turn2.body?.metadata?.loopSignals));
+  } finally {
+    if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorKey;
+  }
+});
+
 test('bulk upsert enforces objective and KR limits', async () => {
   const app = createApp();
 

@@ -41,7 +41,13 @@ export interface StructuredCheckinInput {
 
 async function hydrateOkr(okrId: number) {
   const okrRes = await pool.query(
-    `SELECT id, user_id, team_id, objective, timeframe, created_at, updated_at FROM okrs WHERE id = $1`,
+    `SELECT o.id, o.user_id, o.team_id, o.objective, o.timeframe, o.created_at, o.updated_at,
+            t.name AS team_name,
+            u.display_name AS owner_display_name
+     FROM okrs o
+     LEFT JOIN teams t ON t.id = o.team_id
+     LEFT JOIN users u ON u.id = o.user_id
+     WHERE o.id = $1`,
     [okrId]
   );
   if (!okrRes.rowCount) return null;
@@ -632,12 +638,40 @@ export async function getLeaderRollup(teamIds: string[]) {
     [teamIds]
   );
 
-  const teams = nowRes.rows.map((row) => ({
-    teamId: row.team_id,
-    onTrack: Number(row.on_track),
-    atRisk: Number(row.at_risk),
-    offTrack: Number(row.off_track)
-  }));
+  const teamMetaRes = await pool.query(
+    `SELECT t.id AS team_id,
+            t.name AS team_display_name,
+            u.display_name AS owner_display_name
+     FROM teams t
+     LEFT JOIN team_memberships tm ON tm.team_id = t.id AND tm.role = 'manager'
+     LEFT JOIN users u ON u.id = tm.user_id
+     WHERE t.id = ANY($1::text[])
+     ORDER BY t.name ASC`,
+    [teamIds]
+  );
+
+  const teamMeta = new Map<string, { teamDisplayName?: string; ownerDisplayName?: string | null }>();
+  for (const row of teamMetaRes.rows) {
+    if (!teamMeta.has(row.team_id)) {
+      teamMeta.set(row.team_id, {
+        teamDisplayName: row.team_display_name ?? undefined,
+        ownerDisplayName: row.owner_display_name ?? null
+      });
+    }
+  }
+
+  const teams = nowRes.rows.map((row) => {
+    const meta = teamMeta.get(row.team_id);
+    return {
+      teamId: row.team_id,
+      teamDisplayName: meta?.teamDisplayName,
+      ownerDisplayName: meta?.ownerDisplayName ?? null,
+      ownerLabel: meta?.ownerDisplayName ? `Owner: ${meta.ownerDisplayName}` : 'Owner: Unassigned',
+      onTrack: Number(row.on_track),
+      atRisk: Number(row.at_risk),
+      offTrack: Number(row.off_track)
+    };
+  });
 
   return {
     generatedAt: new Date().toISOString(),

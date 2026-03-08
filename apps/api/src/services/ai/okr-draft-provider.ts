@@ -17,6 +17,11 @@ export interface OkrDraftMetadata {
   model?: string;
   reason?: string;
   durationMs: number;
+  loopDetected?: boolean;
+  loopStage?: 'none' | 'detected' | 'multiple_choice' | 'assumption_synthesis';
+  loopRiskScore?: number;
+  loopSignals?: string[];
+  loopEscapePath?: 'assumption_synthesis' | 'multiple_choice';
 }
 
 export interface OkrDraftResult {
@@ -265,6 +270,123 @@ function normalizeAssistantMessage(message: string): string {
 
 function isKrFormatValid(title: string): boolean {
   return /^(increase|decrease|reduce|grow|improve)\s.+\sfrom\s.+\sto\s.+$/i.test(title.trim());
+}
+
+function normalizeSemanticText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function tokenize(text: string): Set<string> {
+  return new Set(normalizeSemanticText(text).split(' ').filter((token) => token.length > 2));
+}
+
+function jaccardSimilarity(a: string, b: string): number {
+  const tokensA = tokenize(a);
+  const tokensB = tokenize(b);
+  if (!tokensA.size && !tokensB.size) return 1;
+  let intersection = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) intersection += 1;
+  }
+  const union = new Set([...tokensA, ...tokensB]).size;
+  return union ? intersection / union : 0;
+}
+
+function classifyPromptTheme(text: string): RequiredContextField | 'other' {
+  const lower = normalizeSemanticText(text);
+  if (/(outcome|result|goal|improve|what area)/.test(lower)) return 'outcome';
+  if (/(why|strategic|matter|benefit|priority|now)/.test(lower)) return 'strategicWhy';
+  if (/(baseline|current|from|starting point)/.test(lower)) return 'baseline';
+  if (/(target|to\s+\d|by when|by end)/.test(lower)) return 'target';
+  if (/(constraint|budget|team|resource|limit)/.test(lower)) return 'constraints';
+  if (/(timeframe|quarter|q[1-4]|month|week|deadline)/.test(lower)) return 'timeframe';
+  return 'other';
+}
+
+function answeredFieldMemory(messages: OkrConversationMessage[]): Record<RequiredContextField, boolean> {
+  const userText = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n').toLowerCase();
+  return {
+    outcome: /(outcome|goal|want to|improve|reduce|increase)/.test(userText),
+    strategicWhy: /(why|because|so that|in order to|competitive|retention|market share|margin)/.test(userText),
+    baseline: /(baseline|current|currently|from\s+\d)/.test(userText),
+    target: /(target|to\s+\d|by\s+end|by\s+q[1-4]|within\s+\d)/.test(userText),
+    constraints: /(constraint|constraints|budget|team of|resource|limit)/.test(userText),
+    timeframe: /(timeframe|q[1-4]\s*20\d\d|this quarter|month|weeks?)/.test(userText)
+  };
+}
+
+function applyLoopMitigation(input: OkrConversationRequest, result: OkrConversationResult): OkrConversationResult {
+  const safeMessages = sanitizeMessages(input.messages);
+  const assistantHistory = safeMessages.filter((m) => m.role === 'assistant').map((m) => m.content);
+  const recentAssistants = assistantHistory.slice(-4);
+  const previousAssistant = recentAssistants[recentAssistants.length - 1] || '';
+
+  const proposedTheme = classifyPromptTheme(result.assistantMessage);
+  const previousTheme = classifyPromptTheme(previousAssistant);
+  const sameThemeRepeat = proposedTheme !== 'other' && proposedTheme === previousTheme;
+  const highSimilarity = previousAssistant ? jaccardSimilarity(previousAssistant, result.assistantMessage) >= 0.62 : false;
+  const recentQuestionTurns = safeMessages.slice(-8).filter((m, idx, arr) => m.role === 'assistant' && idx >= arr.length - 8).length;
+  const answeredMemory = answeredFieldMemory(safeMessages);
+  const missingFields = (result.missingContext ?? []).map((field) => field === 'target_value' ? 'target' : field) as RequiredContextField[];
+  const missingButAnswered = missingFields.filter((field) => answeredMemory[field]);
+
+  const signals: string[] = [];
+  if (sameThemeRepeat) signals.push('same_theme_repeat');
+  if (highSimilarity) signals.push('semantic_repeat');
+  if (recentQuestionTurns >= 3 && result.mode === 'questions') signals.push('question_streak');
+  if (missingButAnswered.length > 0) signals.push('answered_field_still_missing');
+
+  const loopRiskScore = Math.min(1, signals.length / 3 + (result.mode === 'questions' ? 0.2 : 0));
+  const loopDetected = loopRiskScore >= 0.5;
+
+  if (loopDetected && result.mode === 'questions' && (recentQuestionTurns >= 4 || loopRiskScore >= 0.8)) {
+    const draftWithAssumptions = normalizeDraftShape(result.draft, input.timeframe || DEFAULT_TIMEFRAME);
+    if (!draftWithAssumptions.objective || draftWithAssumptions.objective === 'Define a measurable outcome for this period') {
+      draftWithAssumptions.objective = 'Improve strategic performance with explicit assumptions';
+    }
+
+    return {
+      ...result,
+      mode: 'refine',
+      questions: [],
+      assistantMessage: normalizeAssistantMessage('I have enough to draft with assumptions so we can move forward. I’ll mark gaps as TBD and you can refine directly.'),
+      draft: draftWithAssumptions,
+      metadata: {
+        ...result.metadata,
+        loopDetected: true,
+        loopStage: 'assumption_synthesis',
+        loopRiskScore,
+        loopSignals: signals,
+        loopEscapePath: 'assumption_synthesis'
+      }
+    };
+  }
+
+  if (loopDetected && result.mode === 'questions' && missingFields[0]) {
+    return {
+      ...result,
+      assistantMessage: normalizeAssistantMessage(`${missingFieldQuestion(missingFields[0])} Choose one: A) quick estimate B) exact metric C) proceed with assumption.`),
+      metadata: {
+        ...result.metadata,
+        loopDetected: true,
+        loopStage: 'multiple_choice',
+        loopRiskScore,
+        loopSignals: signals,
+        loopEscapePath: 'multiple_choice'
+      }
+    };
+  }
+
+  return {
+    ...result,
+    metadata: {
+      ...result.metadata,
+      loopDetected,
+      loopStage: loopDetected ? 'detected' : 'none',
+      loopRiskScore,
+      loopSignals: signals
+    }
+  };
 }
 
 function parseBaselineNumber(baseline: string, fallback: number): number {
@@ -747,13 +869,13 @@ class ResilientDraftProvider implements OkrDraftProvider {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.llmProvider.continueConversation(input);
-        return {
+        return applyLoopMitigation(input, {
           ...result,
           metadata: {
             ...result.metadata,
             durationMs: Date.now() - startedAt
           }
-        };
+        });
       } catch (error: any) {
         lastError = error;
         const retryable = isRetryableLlmError(error);
@@ -763,7 +885,7 @@ class ResilientDraftProvider implements OkrDraftProvider {
     }
 
     const fallback = this.fallbackProvider.continueConversation(input);
-    return {
+    return applyLoopMitigation(input, {
       ...fallback,
       metadata: {
         source: 'fallback',
@@ -771,7 +893,7 @@ class ResilientDraftProvider implements OkrDraftProvider {
         reason: lastError?.name === 'AbortError' ? 'llm_timeout' : (lastError?.message ?? 'llm_failed'),
         durationMs: Date.now() - startedAt
       }
-    };
+    });
   }
 }
 
