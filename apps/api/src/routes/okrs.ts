@@ -19,6 +19,7 @@ import {
   publishDraftSession,
   updateOkr
 } from '../data/okrs-repo.js';
+import { resolveDefaultModeAssignment, resolveDefaultModeConfigFromEnv } from '../data/experiments-repo.js';
 import { createOkrDraftProvider, type OkrConversationMessage } from '../services/ai/okr-draft-provider.js';
 import { applyPreviewSelection, buildPreview, parseWorkbook } from '../services/excel/kr-import.js';
 import { canCheckin, canManageDrafts, canManageOkrs, canPublishOkrs, canViewTeam, getActorContext, type ActorContext } from '../modules/auth/rbac.js';
@@ -196,6 +197,33 @@ function deriveKrQualityHints(input: { title: string; targetValue: number; curre
   if (!/Q[1-4]|month|week|year|20\d{2}/i.test(timeframe)) hints.push('Specify a clearer timeframe (e.g., Q2 2026).');
   return hints;
 }
+
+okrsRouter.get('/api/experiments/default-mode', requireMutatingAuth, async (req, res) => {
+  try {
+    const actor = await requesterActor(req);
+    const config = resolveDefaultModeConfigFromEnv(process.env);
+    const rawOverride = typeof req.header('x-exp-default-mode-variant') === 'string'
+      ? req.header('x-exp-default-mode-variant')
+      : typeof req.query?.variant === 'string'
+        ? req.query.variant
+        : undefined;
+
+    const overrideVariant = config.allowOverrideHeader && (rawOverride === 'wizard_first' || rawOverride === 'conversational_first')
+      ? rawOverride
+      : undefined;
+
+    const resolution = await resolveDefaultModeAssignment({
+      userId: actor.userId,
+      teamId: actor.activeTeamId,
+      overrideVariant,
+      config
+    });
+
+    return res.status(200).json({ ok: true, ...resolution });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, error: error?.message ?? 'failed_resolve_default_mode' });
+  }
+});
 
 okrsRouter.post('/api/okrs/draft', async (req, res) => {
   try {

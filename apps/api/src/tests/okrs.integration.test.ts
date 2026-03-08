@@ -15,7 +15,7 @@ const authHeaders = {
 };
 
 async function resetTables() {
-  await pool.query('TRUNCATE TABLE kr_checkins, key_results, okrs RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE TABLE experiment_assignments, kr_checkins, key_results, okrs RESTART IDENTITY CASCADE');
 }
 
 test.before(async () => {
@@ -29,6 +29,69 @@ test.after(async () => {
 
 test.beforeEach(async () => {
   await resetTables();
+});
+
+test('default-mode experiment assignment is sticky for same user/team', async () => {
+  const previousEnabled = process.env.EXPERIMENT_DEFAULT_MODE_ENABLED;
+  const previousTraffic = process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT;
+  const previousWiz = process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD;
+  const previousConv = process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL;
+
+  process.env.EXPERIMENT_DEFAULT_MODE_ENABLED = 'true';
+  process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT = '100';
+  process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD = '50';
+  process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL = '50';
+
+  try {
+    const app = createApp();
+    const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+    const first = await request(app).get('/api/experiments/default-mode').set(headers);
+    const second = await request(app).get('/api/experiments/default-mode').set(headers);
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(first.body?.ok, true);
+    assert.equal(second.body?.ok, true);
+    assert.equal(first.body?.variant, second.body?.variant);
+    assert.ok(['wizard_first', 'conversational_first', 'not_enrolled'].includes(first.body?.variant));
+    assert.equal(second.body?.sticky, true);
+  } finally {
+    if (previousEnabled === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_ENABLED;
+    else process.env.EXPERIMENT_DEFAULT_MODE_ENABLED = previousEnabled;
+    if (previousTraffic === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT;
+    else process.env.EXPERIMENT_DEFAULT_MODE_TRAFFIC_PERCENT = previousTraffic;
+    if (previousWiz === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD;
+    else process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_WIZARD = previousWiz;
+    if (previousConv === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL;
+    else process.env.EXPERIMENT_DEFAULT_MODE_WEIGHT_CONVERSATIONAL = previousConv;
+  }
+});
+
+test('default-mode experiment endpoint returns additive response shape', async () => {
+  const previousEnabled = process.env.EXPERIMENT_DEFAULT_MODE_ENABLED;
+  process.env.EXPERIMENT_DEFAULT_MODE_ENABLED = 'false';
+
+  try {
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/experiments/default-mode')
+      .set({ ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(typeof res.body?.experimentKey, 'string');
+    assert.equal(typeof res.body?.enabled, 'boolean');
+    assert.ok(['wizard_first', 'conversational_first', 'not_enrolled'].includes(res.body?.variant));
+    assert.ok(['wizard', 'conversational'].includes(res.body?.defaultMode));
+    assert.equal(typeof res.body?.sticky, 'boolean');
+    assert.equal(typeof res.body?.reason, 'string');
+    assert.equal(res.body?.enabled, false);
+    assert.equal(res.body?.defaultMode, 'wizard');
+  } finally {
+    if (previousEnabled === undefined) delete process.env.EXPERIMENT_DEFAULT_MODE_ENABLED;
+    else process.env.EXPERIMENT_DEFAULT_MODE_ENABLED = previousEnabled;
+  }
 });
 
 test('draft -> save -> fetch -> check-in happy path', async () => {

@@ -74,6 +74,7 @@ export function createApp() {
         'GET /api/reminders?limit=20',
         'POST /api/reminders/:id/requeue',
         'POST /api/reminders/run-due',
+        'GET /api/experiments/default-mode',
         'POST /api/okrs/draft',
         'GET /api/okrs',
         'GET /api/manager/digest',
