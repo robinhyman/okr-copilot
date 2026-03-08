@@ -1,5 +1,7 @@
 # Demo Handover — A/B Default Create Entry Increment 1
 
+> Status (2026-03-08 update): superseded by conversational-only create direction in `docs/decision-conversational-only-2026-03-08.md` and `docs/demo-conversational-only-increment-2026-03-08.md`.
+
 Date: 2026-03-08
 
 References:
@@ -53,9 +55,11 @@ References:
 - Distribution check validates allocation sanity statistically, not production traffic outcomes.
 - Accessibility hardening for focus-trap/restore still has follow-up items for a later increment.
 
-## 6) Proposed next increment
+## 6) Updated next increment (executive decision)
 
-- Production analytics/reporting layer for experiment decisioning:
-  - variant-level publish conversion dashboard,
-  - intention-to-treat vs as-treated reporting,
-  - decision checkpoint at 2 weeks.
+- Move to **conversational-only** create experience (drop wizard mode):
+  - remove user-facing wizard entry and mode-switch UX,
+  - remove A/B default-mode branching from product-facing flow,
+  - keep telemetry focused on conversational draft-to-publish funnel,
+  - preserve strict gates (`release:gate`, `done:proof`) and evidence handover.
+- Decision reference: `docs/decision-conversational-only-2026-03-08.md`.
