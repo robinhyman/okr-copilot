@@ -25,7 +25,8 @@
     "seed:demo": "./scripts/seed-demo.sh",
     "demo:prepare": "node scripts/demo-prepare.mjs",
     "release:gate": "node scripts/release-gate.mjs",
-    "done:proof": "bash scripts/done-proof.sh"
+    "done:proof": "bash scripts/done-proof.sh",
+    "team:packet": "node scripts/team-packet.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
