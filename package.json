@@ -24,7 +24,8 @@
     "release:checklist": "bash scripts/verify-pr-evidence.sh",
     "seed:demo": "./scripts/seed-demo.sh",
     "demo:prepare": "node scripts/demo-prepare.mjs",
-    "release:gate": "node scripts/release-gate.mjs"
+    "release:gate": "node scripts/release-gate.mjs",
+    "done:proof": "bash scripts/done-proof.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
