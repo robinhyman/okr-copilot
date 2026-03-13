@@ -62,13 +62,6 @@ type TeamCheckin = {
 type FlowMode = 'wizard' | 'conversational';
 type Variant = 'wizard_first' | 'conversational_first' | 'none';
 
-type AssignmentResponse = {
-  ok: boolean;
-  experimentKey?: string;
-  variant?: Variant;
-  defaultMode?: FlowMode;
-  reason?: 'assigned' | 'forced_off' | 'override' | 'not_enrolled';
-};
 
 const apiBase =
   import.meta.env.VITE_API_BASE_URL ||
@@ -132,21 +125,10 @@ export function App() {
   const [checkinNote, setCheckinNote] = useState('');
   const [checkinStatus, setCheckinStatus] = useState('');
 
-  const [defaultMode, setDefaultMode] = useState<FlowMode>('wizard');
-  const [currentMode, setCurrentMode] = useState<FlowMode>('wizard');
+  const [defaultMode, setDefaultMode] = useState<FlowMode>('conversational');
+  const [currentMode, setCurrentMode] = useState<FlowMode>('conversational');
   const [assignmentVariant, setAssignmentVariant] = useState<Variant>('none');
   const [assignmentReady, setAssignmentReady] = useState(false);
-  const [escapeHatchActive, setEscapeHatchActive] = useState(false);
-  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
-  const [switchBanner, setSwitchBanner] = useState('');
-  const [wizardInput, setWizardInput] = useState({
-    focusArea: '',
-    timeframe: 'Q2 2026',
-    baseline: '',
-    constraints: '',
-    objectiveStatement: '',
-    keyResultCount: 3
-  });
 
   const sessionStartRef = useRef<number | null>(null);
   const modalOpenRef = useRef<number | null>(null);
@@ -210,26 +192,12 @@ export function App() {
 
   async function resolveDefaultMode() {
     setAssignmentReady(false);
-    try {
-      const response = await jsonFetch('/api/experiments/default-mode', undefined, actorHeaders) as AssignmentResponse;
-      const resolved = response.defaultMode === 'conversational' ? 'conversational' : 'wizard';
-      const variant = response.variant ?? (resolved === 'conversational' ? 'conversational_first' : 'wizard_first');
-      setDefaultMode(resolved);
-      setCurrentMode(resolved);
-      setAssignmentVariant(variant);
-      void trackUiEvent('ab_assignment_resolved', {
-        variant,
-        source: response.reason === 'assigned' ? 'new' : response.reason === 'forced_off' ? 'fallback' : 'sticky'
-      });
-    } catch {
-      setDefaultMode('wizard');
-      setCurrentMode('wizard');
-      setAssignmentVariant('wizard_first');
-      void trackUiEvent('ab_assignment_resolved', { variant: 'wizard_first', source: 'fallback' });
-    } finally {
-      setAssignmentReady(true);
-      exposureSentRef.current = false;
-    }
+    setDefaultMode('conversational');
+    setCurrentMode('conversational');
+    setAssignmentVariant('conversational_first');
+    void trackUiEvent('ab_assignment_resolved', { variant: 'conversational_first', source: 'override' });
+    setAssignmentReady(true);
+    exposureSentRef.current = false;
   }
 
   async function loadOkrs() {
@@ -286,9 +254,6 @@ export function App() {
     setCheckinValue('');
     setCheckinNote('');
     setCheckinStatus('');
-    setSwitchBanner('');
-    setShowSwitchConfirm(false);
-    setEscapeHatchActive(false);
     sessionStartRef.current = null;
     modalOpenRef.current = null;
   }, [personaKey]);
@@ -307,14 +272,11 @@ export function App() {
 
   async function openCreateFlow(entryPoint: 'primary_cta' | 'resume_draft' | 'deep_link') {
     if (!assignmentReady) return;
-    setCurrentMode(defaultMode);
+    setCurrentMode('conversational');
     setIsCoachModalOpen(true);
     modalOpenRef.current = performance.now();
     void trackUiEvent('coach_entry_clicked', { entry_point: entryPoint, variant: assignmentVariant });
-
-    if (defaultMode === 'conversational') {
-      await startDraftSession();
-    }
+    await startDraftSession();
   }
 
   async function startDraftSession() {
@@ -369,44 +331,10 @@ export function App() {
     }
   }
 
-  async function generateWizardDraft() {
-    setIsStartingCoachSession(true);
-    setStatus('Generating wizard draft…');
-    try {
-      if (!activeDraftId) {
-        const created = await jsonFetch('/api/okr-drafts/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: `${persona.teamId} wizard draft`, metadata: { variant: assignmentVariant } })
-        }, actorHeaders);
-        setActiveDraftId(Number(created?.session?.id));
-      }
-
-      const response = await jsonFetch('/api/okrs/wizard-draft', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...wizardInput, aiAssist: true })
-      }, actorHeaders);
-
-      setActiveDraft(response.draft);
-      setStatus(`Wizard draft generated.${response.metadata?.source ? ` source: ${response.metadata.source}` : ''}`);
-      void trackUiEvent('okr_draft_generated', {
-        flow: 'wizard',
-        generation_source: response.metadata?.source ?? 'fallback',
-        fallback_reason: response.metadata?.reason ?? null
-      });
-      await loadDrafts();
-    } catch (error: any) {
-      setStatus(`Wizard generation failed: ${error?.message ?? 'unknown error'}`);
-    } finally {
-      setIsStartingCoachSession(false);
-    }
-  }
-
   async function resumeDraft(session: DraftSession) {
     setActiveDraftId(session.id);
     setActiveDraft(session.current_draft ?? null);
-    setCurrentMode(session.variant === 'wizard_first' ? 'wizard' : session.variant === 'conversational_first' ? 'conversational' : defaultMode);
+    setCurrentMode('conversational');
     setChatMessages([{ role: 'assistant', content: `Resumed draft: ${session.title}. Tell me what to refine.` }]);
     setCoachPrompts([]);
     setIsCoachThinking(false);
@@ -505,26 +433,6 @@ export function App() {
     await loadOverviewRoleData();
   }
 
-  async function switchExperience(nextMode: FlowMode, reason: 'manual' | 'error_recovery' | 'performance_timeout' = 'manual') {
-    if (nextMode === currentMode) return;
-    if (isCoachThinking) {
-      setStatus('Please wait for current response before switching experience.');
-      return;
-    }
-    setCurrentMode(nextMode);
-    setSwitchBanner(`You’re now using ${nextMode === 'wizard' ? 'Experience A' : 'Experience B'}. Your draft has been preserved.`);
-    setShowSwitchConfirm(false);
-    void trackUiEvent('ab_switch_confirmed', { from_flow: currentMode, to_flow: nextMode });
-    if (reason !== 'manual') {
-      void trackUiEvent('ab_escape_hatch_used', { reason });
-    }
-  }
-
-  function useStableExperience() {
-    setEscapeHatchActive(true);
-    void switchExperience('wizard', 'error_recovery');
-  }
-
   function openKrCheckinModal(input: { krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string }) {
     setCheckinKr(input);
     setCheckinValue(String(input.currentValue));
@@ -592,9 +500,8 @@ export function App() {
             <h2>OKR Creation</h2>
             <div className="row" style={{ justifyContent: 'space-between' }}>
               <button disabled={!assignmentReady || isStartingCoachSession} onClick={() => void openCreateFlow('primary_cta')}>
-                {!assignmentReady ? 'Resolving experience…' : defaultMode === 'wizard' ? 'Create OKR with Wizard' : 'Create OKR with Coach'}
+                {!assignmentReady ? 'Preparing coach…' : 'Create OKR with Coach'}
               </button>
-              <p className="muted">Experiment: {assignmentVariant === 'wizard_first' ? 'Experience A' : assignmentVariant === 'conversational_first' ? 'Experience B' : 'Stable'}</p>
               <p className="muted">State: {coachUiState}</p>
               {!!status && <p className="muted" aria-live="polite">{status}</p>}
               {(modalOpenLatencyMs !== null || firstCoachResponseMs !== null) && (
@@ -618,95 +525,54 @@ export function App() {
               <div className="coach-modal-backdrop" role="presentation">
                 <section className="coach-modal" role="dialog" aria-label="OKR coach dialog" aria-modal="true">
                   <div className="coach-modal-header row" style={{ justifyContent: 'space-between' }}>
-                    <h3>{currentMode === 'wizard' ? 'Create OKR with Wizard' : 'Create OKR with Coach'} <span className="badge">{currentMode === 'wizard' ? 'Experience A' : 'Experience B'}</span> {escapeHatchActive ? <span className="badge">Stable experience on</span> : null}</h3>
+                    <h3>Create OKR with Coach</h3>
                     <div className="row">
-                      <button className="secondary" onClick={() => { setShowSwitchConfirm((v) => !v); void trackUiEvent('ab_switch_initiated', { from_flow: currentMode }); }}>Switch experience</button>
                       <button className="secondary" onClick={() => setIsCoachModalOpen(false)}>Continue later</button>
                     </div>
                   </div>
 
-                  {showSwitchConfirm ? (
-                    <div className="panel nested" role="alertdialog" aria-label="Switch experience">
-                      <p><strong>Switch experience?</strong> We’ll keep your draft content. You may see a different layout and guidance style.</p>
+                  <div className="coach-modal-grid">
+                    <div className="panel nested">
+                      <h4>Conversation</h4>
+                      <ul className="history">
+                        {chatMessages.map((m, idx) => {
+                          const turnStatus = formatTurnStatus(m.metadata);
+                          return (
+                            <li key={idx}>
+                              <strong>{m.role === 'assistant' ? 'Coach' : 'You'}:</strong> {m.content}
+                              {turnStatus ? <div className="muted">{turnStatus}</div> : null}
+                            </li>
+                          );
+                        })}
+                        {(isStartingCoachSession || isCoachThinking) && (
+                          <li className="coach-thinking" aria-live="polite">
+                            <strong>Coach:</strong>
+                            <span className="typing-dots" aria-hidden="true">
+                              <span />
+                              <span />
+                              <span />
+                            </span>
+                            <span className="muted"> thinking{thinkingElapsedSeconds && thinkingElapsedSeconds > 4 ? ` (${thinkingElapsedSeconds}s)` : ''}</span>
+                          </li>
+                        )}
+                      </ul>
                       <div className="row">
-                        <button onClick={() => void switchExperience(currentMode === 'wizard' ? 'conversational' : 'wizard')}>Switch now</button>
-                        <button className="secondary" onClick={() => { setShowSwitchConfirm(false); void trackUiEvent('ab_switch_cancelled'); }}>Cancel</button>
-                        <button className="secondary" onClick={() => useStableExperience()}>Use stable experience</button>
+                        <input
+                          value={chatInput}
+                          disabled={isCoachThinking || isStartingCoachSession}
+                          placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Answer the coach...'}
+                          onChange={(e) => setChatInput(e.target.value)}
+                        />
+                        <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
                       </div>
                     </div>
-                  ) : null}
-
-                  {switchBanner ? <p className="muted" aria-live="polite">{switchBanner}</p> : null}
-
-                  <div className="coach-modal-grid">
-                    {currentMode === 'wizard' ? (
-                      <div className="panel nested wizard-input-panel">
-                        <h4>Wizard inputs</h4>
-                        <label>Focus area</label>
-                        <input value={wizardInput.focusArea} onChange={(e) => setWizardInput((v) => ({ ...v, focusArea: e.target.value }))} placeholder="e.g. onboarding conversion" />
-                        <label>Timeframe</label>
-                        <input value={wizardInput.timeframe} onChange={(e) => setWizardInput((v) => ({ ...v, timeframe: e.target.value }))} />
-                        <label>Current baseline</label>
-                        <input value={wizardInput.baseline} onChange={(e) => setWizardInput((v) => ({ ...v, baseline: e.target.value }))} placeholder="Current baseline metric" />
-                        <label>Constraints</label>
-                        <textarea value={wizardInput.constraints} onChange={(e) => setWizardInput((v) => ({ ...v, constraints: e.target.value }))} rows={3} />
-                        <label>Objective statement</label>
-                        <textarea value={wizardInput.objectiveStatement} onChange={(e) => setWizardInput((v) => ({ ...v, objectiveStatement: e.target.value }))} rows={3} />
-                        <label>Key result count</label>
-                        <select value={wizardInput.keyResultCount} onChange={(e) => setWizardInput((v) => ({ ...v, keyResultCount: Number(e.target.value) }))}>
-                          <option value={2}>2</option>
-                          <option value={3}>3</option>
-                          <option value={4}>4</option>
-                          <option value={5}>5</option>
-                        </select>
-                        <div className="row">
-                          <button disabled={isStartingCoachSession} onClick={() => void generateWizardDraft()}>{isStartingCoachSession ? 'Generating…' : 'Generate full draft'}</button>
-                          <button className="secondary" onClick={() => useStableExperience()}>Use stable experience</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="panel nested">
-                        <h4>Conversation</h4>
-                        <ul className="history">
-                          {chatMessages.map((m, idx) => {
-                            const turnStatus = formatTurnStatus(m.metadata);
-                            return (
-                              <li key={idx}>
-                                <strong>{m.role === 'assistant' ? 'Coach' : 'You'}:</strong> {m.content}
-                                {turnStatus ? <div className="muted">{turnStatus}</div> : null}
-                              </li>
-                            );
-                          })}
-                          {(isStartingCoachSession || isCoachThinking) && (
-                            <li className="coach-thinking" aria-live="polite">
-                              <strong>Coach:</strong>
-                              <span className="typing-dots" aria-hidden="true">
-                                <span />
-                                <span />
-                                <span />
-                              </span>
-                              <span className="muted"> thinking{thinkingElapsedSeconds && thinkingElapsedSeconds > 4 ? ` (${thinkingElapsedSeconds}s)` : ''}</span>
-                            </li>
-                          )}
-                        </ul>
-                        <div className="row">
-                          <input
-                            value={chatInput}
-                            disabled={isCoachThinking || isStartingCoachSession}
-                            placeholder={isCoachThinking || isStartingCoachSession ? 'Coach is thinking…' : 'Answer the coach...'}
-                            onChange={(e) => setChatInput(e.target.value)}
-                          />
-                          <button disabled={isCoachThinking || isStartingCoachSession} onClick={() => void sendChatTurn()}>Send</button>
-                        </div>
-                      </div>
-                    )}
 
                     <div className="panel nested">
                       <h4>Prompt focus</h4>
                       {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : <p className="muted">{isStartingCoachSession ? 'Loading coach prompts…' : 'No missing-context prompts right now.'}</p>}
                       <div className="row">
-                        <button disabled={currentMode !== 'conversational' || isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
-                        <button disabled={currentMode !== 'conversational' || isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
+                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Generate the first full draft now.')}>Generate draft</button>
+                        <button disabled={isCoachThinking || isStartingCoachSession} className="secondary" onClick={() => void sendChatTurn('Make KRs more measurable.')}>Make KRs measurable</button>
                       </div>
                     </div>
 
