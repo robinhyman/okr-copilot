@@ -3,7 +3,7 @@ import { getRoutePath, type RoutePath } from './lib/ui';
 import { deriveCoachUiState, publishButtonEnabled } from './lib/conversationFlow';
 import { buildGroupedOverviewMetrics } from './lib/overviewMetrics';
 import { OverviewDashboard } from './components/OverviewDashboard';
-import { buildDeterministicFirstCoachQuestion } from './lib/coachStatus';
+
 
 type ApiOkr = {
   id: number;
@@ -345,22 +345,11 @@ export function App() {
 
       setActiveDraft(null);
       setCoachPrompts([]);
-      setChatMessages([
-        {
-          role: 'assistant',
-          content: buildDeterministicFirstCoachQuestion(persona.teamId),
-          metadata: {
-            source: 'fallback',
-            provider: 'deterministic',
-            reason: 'deterministic_first_turn',
-            mode: 'questions'
-          }
-        }
-      ]);
+      setChatMessages([]);
 
       const firstResponse = sessionStartRef.current !== null ? Math.round(performance.now() - sessionStartRef.current) : null;
       setFirstCoachResponseMs(firstResponse);
-      setStatus(`Coach session started · deterministic first turn${firstResponse !== null ? ` · first response ${firstResponse}ms` : ''}`.trim());
+      setStatus(`Coach session started${firstResponse !== null ? ` · ready ${firstResponse}ms` : ''}`.trim());
       void trackUiEvent('okr_draft_started', { flow: 'conversational' });
       void loadDrafts();
     } catch (error: any) {

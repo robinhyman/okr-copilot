@@ -1008,13 +1008,13 @@ class ResilientDraftProvider implements OkrDraftProvider {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.llmProvider.continueConversation(input);
-        return applyLoopMitigation(input, {
+        return {
           ...result,
           metadata: {
             ...result.metadata,
             durationMs: Date.now() - startedAt
           }
-        });
+        };
       } catch (error: any) {
         lastError = error;
         const retryable = isRetryableLlmError(error);
@@ -1024,7 +1024,7 @@ class ResilientDraftProvider implements OkrDraftProvider {
     }
 
     const fallback = this.fallbackProvider.continueConversation(input);
-    return applyLoopMitigation(input, {
+    return {
       ...fallback,
       metadata: {
         source: 'fallback',
@@ -1032,7 +1032,7 @@ class ResilientDraftProvider implements OkrDraftProvider {
         reason: lastError?.name === 'AbortError' ? 'llm_timeout' : (lastError?.message ?? 'llm_failed'),
         durationMs: Date.now() - startedAt
       }
-    });
+    };
   }
 }
 
