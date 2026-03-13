@@ -596,11 +596,6 @@ export function App() {
     ? Math.max(0, Math.round(modalOpenRef.current - sessionStartRef.current))
     : null;
   const thinkingElapsedSeconds = coachThinkingSinceMs ? Math.max(0, Math.floor((Date.now() - coachThinkingSinceMs) / 1000)) : null;
-  const suggestedChips = [
-    ...(coachPrompts.slice(0, 2)),
-    ...(!coachPrompts.length ? ['Generate the first full draft now.'] : []),
-    ...(activeDraft?.keyResults?.length ? ['Make KRs more measurable.'] : [])
-  ].filter((chip, index, all) => all.indexOf(chip) === index).slice(0, 3);
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter') return;
@@ -698,23 +693,6 @@ export function App() {
                           </li>
                         )}
                       </ul>
-                      {(!isCoachThinking && !isStartingCoachSession && suggestedChips.length) ? (
-                        <div className="row" style={{ flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.4rem' }}>
-                          {suggestedChips.map((chip) => (
-                            <button
-                              key={chip}
-                              type="button"
-                              className="secondary"
-                              onClick={() => {
-                                void trackUiEvent('suggested_chip_clicked', { chip_text: chip, flow: currentMode });
-                                void sendChatTurn(chip);
-                              }}
-                            >
-                              {chip}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
                       <div className="row">
                         <textarea
                           value={chatInput}
