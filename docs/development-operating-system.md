@@ -35,7 +35,10 @@ No “done” claim unless all pass:
 - demo is runnable,
 - required seeded data checks pass,
 - persona validation checks pass for in-scope roles,
-- evidence note exists.
+- evidence note exists,
+- **`npm run done:proof` passes** (API live + Web live + populated data checks).
+
+If `done:proof` fails, status must be reported as **NOT DONE**.
 
 ## 5) Required evidence artifact
 
