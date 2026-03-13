@@ -697,18 +697,6 @@ export function App() {
                       </div>
                     </div>
 
-                    <div className="panel nested">
-                      <h4>Prompt focus</h4>
-                      {coachPrompts.length ? <ul className="history">{coachPrompts.map((q, i) => <li key={i}>{q}</li>)}</ul> : null}
-                      <p className="muted">
-                        {isStartingCoachSession
-                          ? 'Loading prompt context…'
-                          : hasPreviewReadinessThreshold(activeDraft)
-                            ? 'You’re on track — use a shortcut or reply to coach.'
-                            : 'Tip: answer one more coach question to unlock draft preview.'}
-                      </p>
-                      <p className="muted">Use the suggested chips above the composer for quick actions.</p>
-                    </div>
 
                     <div className="panel nested wizard-output-panel" aria-live="polite">
                       <h4>Live draft preview</h4>
