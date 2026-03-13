@@ -3,7 +3,7 @@ import { getRoutePath, type RoutePath } from './lib/ui';
 import { deriveCoachUiState, publishButtonEnabled } from './lib/conversationFlow';
 import { buildGroupedOverviewMetrics } from './lib/overviewMetrics';
 import { OverviewDashboard } from './components/OverviewDashboard';
-import { buildDeterministicFirstCoachQuestion, formatTurnStatus } from './lib/coachStatus';
+import { buildDeterministicFirstCoachQuestion } from './lib/coachStatus';
 
 type ApiOkr = {
   id: number;
@@ -441,9 +441,8 @@ export function App() {
           }
         }
       ]);
-      const sourceStatus = formatTurnStatus(response.metadata);
       const turnLatencyMs = Math.round(performance.now() - turnStartedAt);
-      setStatus(`${response.mode === 'questions' ? 'Coach asked follow-up questions.' : 'Draft refined.'}${sourceStatus ? ` · ${sourceStatus}` : ''} · response ${turnLatencyMs}ms`);
+      setStatus(`${response.mode === 'questions' ? 'Coach asked follow-up questions.' : 'Draft refined.'} · response ${turnLatencyMs}ms`);
       void trackUiEvent('coach_response_received', {
         flow: 'conversational',
         latency_ms: turnLatencyMs,
@@ -599,7 +598,7 @@ export function App() {
   const thinkingElapsedSeconds = coachThinkingSinceMs ? Math.max(0, Math.floor((Date.now() - coachThinkingSinceMs) / 1000)) : null;
   const suggestedChips = [
     ...(coachPrompts.slice(0, 2)),
-    'Generate the first full draft now.',
+    ...(!coachPrompts.length ? ['Generate the first full draft now.'] : []),
     ...(activeDraft?.keyResults?.length ? ['Make KRs more measurable.'] : [])
   ].filter((chip, index, all) => all.indexOf(chip) === index).slice(0, 3);
 
@@ -681,18 +680,9 @@ export function App() {
                       <h4>Conversation</h4>
                       <ul className="history">
                         {chatMessages.map((m, idx) => {
-                          const turnStatus = formatTurnStatus(m.metadata);
                           return (
                             <li key={idx}>
                               <strong>{m.role === 'assistant' ? 'Coach' : 'You'}:</strong> {m.content}
-                              {turnStatus ? <div className="muted">{turnStatus}</div> : null}
-                              {m.metadata?.progress ? (
-                                <div className="muted">
-                                  Known: {(m.metadata.progress.known ?? []).length} · Inferred: {(m.metadata.progress.inferred ?? []).length} · Missing: {(m.metadata.progress.missing ?? []).length}
-                                  {m.metadata.progress.unlockItem ? ` · Next unlock: ${m.metadata.progress.unlockItem}` : ''}
-                                </div>
-                              ) : null}
-                              {m.metadata?.loopEscapePath ? <div className="muted">Loop recovery: {m.metadata.loopEscapePath}</div> : null}
                             </li>
                           );
                         })}
