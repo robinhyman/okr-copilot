@@ -804,7 +804,7 @@ test('save route blocks generic draft fallback when transcript has numeric evide
   assert.equal(saveRes.body?.qualityGuards?.salvageApplied, true);
 });
 
-test('chat no longer injects loop diagnostics metadata in simplified flow', async () => {
+test('chat emits loop diagnostics metadata and keeps assistant response usable', async () => {
   const priorKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
 
@@ -836,8 +836,8 @@ test('chat no longer injects loop diagnostics metadata in simplified flow', asyn
       });
 
     assert.equal(turn2.status, 200);
-    assert.equal(turn2.body?.metadata?.loopRiskScore, undefined);
-    assert.equal(turn2.body?.metadata?.loopSignals, undefined);
+    assert.equal(typeof turn2.body?.metadata?.loopRiskScore, 'number');
+    assert.ok(Array.isArray(turn2.body?.metadata?.loopSignals));
     assert.ok(typeof turn2.body?.assistantMessage === 'string' && turn2.body.assistantMessage.length > 0);
   } finally {
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY;

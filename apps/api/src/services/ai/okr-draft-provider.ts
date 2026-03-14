@@ -905,7 +905,15 @@ class OpenAiDraftProvider {
       : missingChecklist.map((field) => (field === 'target' ? 'target_value' : field));
 
     const hasBadKrFormat = normalizedDraft.keyResults.some((kr) => !isKrFormatValid(kr.title));
-    const gatedMode = missingChecklist.length > 0 || hasBadKrFormat ? 'questions' : payload.mode === 'questions' ? 'questions' : 'refine';
+    const userTurns = safeMessages.filter((message) => message.role === 'user').length;
+    const lastUserText = [...safeMessages].reverse().find((message) => message.role === 'user')?.content ?? '';
+    const finalizeNow = isFinalizeNowIntent(lastUserText);
+    const strictQuestionGate = (missingChecklist.length >= 3 && userTurns < 3 && !finalizeNow) || (hasBadKrFormat && userTurns < 3 && !finalizeNow);
+    const gatedMode = strictQuestionGate
+      ? 'questions'
+      : payload.mode === 'questions'
+        ? 'questions'
+        : 'refine';
 
     const assistantMessageRaw =
       typeof payload.assistantMessage === 'string' && payload.assistantMessage.trim()
@@ -1036,10 +1044,11 @@ class ResilientDraftProvider implements OkrDraftProvider {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.llmProvider.continueConversation(input);
+        const mitigated = applyLoopMitigation(input, result);
         return {
-          ...result,
+          ...mitigated,
           metadata: {
-            ...result.metadata,
+            ...mitigated.metadata,
             durationMs: Date.now() - startedAt
           }
         };
@@ -1052,9 +1061,11 @@ class ResilientDraftProvider implements OkrDraftProvider {
     }
 
     const fallback = this.fallbackProvider.continueConversation(input);
+    const mitigatedFallback = applyLoopMitigation(input, fallback);
     return {
-      ...fallback,
+      ...mitigatedFallback,
       metadata: {
+        ...mitigatedFallback.metadata,
         source: 'fallback',
         provider: 'deterministic',
         reason: lastError?.name === 'AbortError' ? 'llm_timeout' : (lastError?.message ?? 'llm_failed'),

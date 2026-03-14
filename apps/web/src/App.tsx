@@ -682,6 +682,28 @@ export function App() {
                           </li>
                         )}
                       </ul>
+                      {coachPrompts.length > 0 ? (
+                        <div className="coach-prompt-chips" aria-label="Suggested replies">
+                          {coachPrompts.slice(0, 3).map((prompt, index) => (
+                            <button
+                              key={`${prompt}-${index}`}
+                              type="button"
+                              className="secondary"
+                              disabled={isCoachThinking || isStartingCoachSession}
+                              onClick={() => {
+                                void trackUiEvent('coach_prompt_chip_clicked', {
+                                  flow: currentMode,
+                                  prompt_index: index,
+                                  prompt_length: prompt.length
+                                });
+                                void sendChatTurn(prompt);
+                              }}
+                            >
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="row">
                         <textarea
                           value={chatInput}
