@@ -1,4 +1,12 @@
-type TeamRollup = { teamId: string; onTrack: number; atRisk: number; offTrack: number };
+type TeamRollup = {
+  teamId: string;
+  teamDisplayName?: string;
+  ownerDisplayName?: string | null;
+  ownerLabel?: string;
+  onTrack: number;
+  atRisk: number;
+  offTrack: number;
+};
 type WeeklyRollup = { weekStart: string; onTrack: number; atRisk: number; offTrack: number };
 
 type LeaderRollup = {
@@ -8,6 +16,9 @@ type LeaderRollup = {
 
 type LeaderRollupSnapshotProps = {
   rollup: LeaderRollup;
+  selectedTeamId?: string | null;
+  onSelectTeam?: (teamId: string) => void;
+  onClearTeamSelection?: () => void;
 };
 
 const STATUS_META = [
@@ -15,6 +26,7 @@ const STATUS_META = [
   { key: 'atRisk', label: 'At risk', className: 'needs-attention' },
   { key: 'offTrack', label: 'Off track', className: 'off-track' }
 ] as const;
+
 
 function totalForTeam(team: TeamRollup) {
   return team.onTrack + team.atRisk + team.offTrack;
@@ -28,11 +40,31 @@ function formatPercent(value: number, total: number) {
   return Math.round((value / Math.max(1, total)) * 100);
 }
 
-function formatTeamName(teamId: string) {
-  return teamId.replace(/^team_/, '').toUpperCase();
+function fallbackTeamName(teamId: string) {
+  const plain = teamId.replace(/^team_/, '').replace(/[_-]+/g, ' ').trim();
+  return plain
+    .split(' ')
+    .map((word) => word ? `${word[0].toUpperCase()}${word.slice(1).toLowerCase()}` : '')
+    .join(' ') + ' Team';
 }
 
-export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
+function teamDisplayMeta(team: TeamRollup): { teamName: string; ownerLabel: string } {
+  const teamName = team.teamDisplayName?.trim() || fallbackTeamName(team.teamId);
+  const ownerLabel = team.ownerLabel?.trim()
+    || (team.ownerDisplayName?.trim() ? `Owner: ${team.ownerDisplayName.trim()}` : 'Owner: Unassigned');
+  return { teamName, ownerLabel };
+}
+
+function teamNeedsAttention(team: TeamRollup): boolean {
+  return team.offTrack > 0 || team.atRisk > 0;
+}
+
+export function LeaderRollupSnapshot({
+  rollup,
+  selectedTeamId = null,
+  onSelectTeam,
+  onClearTeamSelection
+}: LeaderRollupSnapshotProps) {
   const latestWeek = rollup.trend[rollup.trend.length - 1];
   const previousWeek = rollup.trend[rollup.trend.length - 2];
   const latestOnTrackRatio = latestWeek ? latestWeek.onTrack / Math.max(1, weekTotal(latestWeek)) : 0;
@@ -48,6 +80,18 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
     { onTrack: 0, atRisk: 0, offTrack: 0 }
   );
 
+  const sortedTeams = [...rollup.teams].sort((a, b) => {
+    if (b.offTrack !== a.offTrack) return b.offTrack - a.offTrack;
+    if (b.atRisk !== a.atRisk) return b.atRisk - a.atRisk;
+    return teamDisplayMeta(a).teamName.localeCompare(teamDisplayMeta(b).teamName);
+  });
+
+  const needsAttentionTeams = sortedTeams.filter(teamNeedsAttention);
+  const stableTeams = sortedTeams.filter((team) => !teamNeedsAttention(team));
+  const selectedTeamMeta = selectedTeamId
+    ? sortedTeams.find((team) => team.teamId === selectedTeamId)
+    : null;
+
   const overallTotal = Math.max(1, overallCounts.onTrack + overallCounts.atRisk + overallCounts.offTrack);
   const donutSegments = [
     { key: 'onTrack', label: 'On track', className: 'on-track', value: overallCounts.onTrack },
@@ -59,11 +103,68 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
   const donutCircumference = 2 * Math.PI * donutRadius;
   let offset = 0;
 
+  const renderTeamRow = (team: TeamRollup) => {
+    const total = Math.max(1, totalForTeam(team));
+    const meta = teamDisplayMeta(team);
+    const isSelected = selectedTeamId === team.teamId;
+    const segments = [
+      { key: 'onTrack', label: 'On track', className: 'on-track', value: team.onTrack },
+      { key: 'atRisk', label: 'At risk', className: 'needs-attention', value: team.atRisk },
+      { key: 'offTrack', label: 'Off track', className: 'off-track', value: team.offTrack }
+    ] as const;
+
+    return (
+      <li key={team.teamId} className="leader-team-row" data-testid={`leader-team-${team.teamId}`}>
+        <button
+          type="button"
+          className="leader-team-button"
+          aria-pressed={isSelected}
+          aria-label={`Filter objectives for ${meta.teamName}`}
+          onClick={() => onSelectTeam?.(team.teamId)}
+        >
+          <div className="leader-team-row-meta">
+            <div>
+              <strong>{meta.teamName}</strong>
+              <div className="muted">{meta.ownerLabel}</div>
+              <div className="muted">{team.teamId}</div>
+            </div>
+            <span className="muted">{totalForTeam(team)} KRs</span>
+          </div>
+          <div className="leader-stack" role="img" aria-label={`${meta.teamName} ownership and health breakdown`}>
+            {segments.map((segment) => (
+              <span
+                key={segment.key}
+                className={`leader-stack-segment ${segment.className}`}
+                style={{ width: `${(segment.value / total) * 100}%` }}
+                title={`${meta.teamName} • ${segment.label}: ${segment.value} KRs (${formatPercent(segment.value, total)}%)`}
+              />
+            ))}
+          </div>
+        </button>
+      </li>
+    );
+  };
+
   return (
     <section className="leader-rollup-snapshot" data-testid="leader-rollup-snapshot">
       <div className="leader-rollup-header">
         <h3>Senior leader rollup snapshot</h3>
-        <p className="muted">Cross-team execution health at a glance</p>
+        <p className="muted">Cross-team execution health and ownership at a glance</p>
+        {selectedTeamMeta ? (
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+            <p className="muted" data-testid="leader-selected-team">
+              Filtered to {teamDisplayMeta(selectedTeamMeta).teamName}
+            </p>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => onClearTeamSelection?.()}
+              aria-label="Clear selected team filter"
+            >
+              Clear filter
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="leader-rollup-grid">
@@ -108,36 +209,20 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
               <div className="leader-donut-center muted">{overallTotal} KRs</div>
             </div>
 
-            <ul className="leader-team-list">
-              {rollup.teams.map((team) => {
-                const total = Math.max(1, totalForTeam(team));
-                const teamName = formatTeamName(team.teamId);
-                const segments = [
-                  { key: 'onTrack', label: 'On track', className: 'on-track', value: team.onTrack },
-                  { key: 'atRisk', label: 'At risk', className: 'needs-attention', value: team.atRisk },
-                  { key: 'offTrack', label: 'Off track', className: 'off-track', value: team.offTrack }
-                ] as const;
-
-                return (
-                  <li key={team.teamId} className="leader-team-row" data-testid={`leader-team-${team.teamId}`}>
-                    <div className="leader-team-row-meta">
-                      <strong>{teamName}</strong>
-                      <span className="muted">{totalForTeam(team)} KRs</span>
-                    </div>
-                    <div className="leader-stack" role="img" aria-label={`${team.teamId} health breakdown`}>
-                      {segments.map((segment) => (
-                        <span
-                          key={segment.key}
-                          className={`leader-stack-segment ${segment.className}`}
-                          style={{ width: `${(segment.value / total) * 100}%` }}
-                          title={`${teamName} • ${segment.label}: ${segment.value} KRs (${formatPercent(segment.value, total)}%)`}
-                        />
-                      ))}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+            <div>
+              {needsAttentionTeams.length ? (
+                <>
+                  <p className="muted leader-group-label">Needs attention now</p>
+                  <ul className="leader-team-list">{needsAttentionTeams.map(renderTeamRow)}</ul>
+                </>
+              ) : null}
+              {stableTeams.length ? (
+                <>
+                  <p className="muted leader-group-label">Stable teams</p>
+                  <ul className="leader-team-list">{stableTeams.map(renderTeamRow)}</ul>
+                </>
+              ) : null}
+            </div>
           </div>
         </div>
 

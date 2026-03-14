@@ -682,6 +682,36 @@ test('coach anti-loop guard prevents consecutive duplicate assistant prompts', a
   }
 });
 
+test('novice first-turn prompt returns guided shortcut chips', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+    const sessionRes = await request(app)
+      .post('/api/okr-drafts/sessions')
+      .set(headers)
+      .send({ title: 'Novice-guided draft' });
+
+    const draftId = Number(sessionRes.body?.session?.id);
+
+    const chatRes = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({ messages: [{ role: 'user', content: 'I am new to OKRs and not sure where to start.' }] });
+
+    assert.equal(chatRes.status, 200);
+    assert.ok(['novice_guided_entry', 'missing_openai_api_key', 'llm_failed', 'llm_timeout'].includes(String(chatRes.body?.metadata?.reason || '')));
+    assert.ok(Array.isArray(chatRes.body?.questions));
+    assert.ok((chatRes.body?.questions ?? []).every((q: string) => q.trim().split(/\s+/).length <= 5));
+  } finally {
+    if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorKey;
+  }
+});
+
 test('missing-context prompts are explicit and field-specific', async () => {
   const priorKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
@@ -706,6 +736,139 @@ test('missing-context prompts are explicit and field-specific', async () => {
     const combined = `${chatRes.body?.assistantMessage || ''} ${(chatRes.body?.questions || []).join(' ')}`.toLowerCase();
     assert.ok(combined.includes('baseline') || combined.includes('target') || combined.includes('constraints'));
     assert.equal(combined.includes('need a bit more context'), false);
+  } finally {
+    if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorKey;
+  }
+});
+
+test('leader rollup returns api-sourced team display and owner labels', async () => {
+  const app = createApp();
+
+  await request(app)
+    .post('/api/okrs')
+    .set({ ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' })
+    .send({
+      objective: 'Improve product reliability',
+      timeframe: 'Q2 2026',
+      keyResults: [{ title: 'Reduce incidents', targetValue: 2, currentValue: 1, unit: 'incidents' }]
+    });
+
+  const res = await request(app)
+    .get('/api/leader/rollup')
+    .set({ ...authHeaders, 'x-auth-user-id': 'leader_exec', 'x-auth-team-id': 'team_product' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body?.ok, true);
+  assert.ok(Array.isArray(res.body?.rollup?.teams));
+  const product = res.body?.rollup?.teams?.find((team: any) => team.teamId === 'team_product');
+  assert.equal(product?.teamDisplayName, 'Product');
+  assert.equal(typeof product?.ownerLabel, 'string');
+});
+
+test('finalize-now intent returns assumption-based draft in simplified flow', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+    const sessionRes = await request(app)
+      .post('/api/okr-drafts/sessions')
+      .set(headers)
+      .send({ title: 'Finalize-now draft' });
+
+    const draftId = Number(sessionRes.body?.session?.id);
+
+    const turn = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({
+        messages: [
+          { role: 'user', content: 'Outcome: reduce onboarding drop-off. Baseline: 42%. Constraints: team of 2. Please finalize now.' }
+        ]
+      });
+
+    assert.equal(turn.status, 200);
+    assert.equal(turn.body?.mode, 'refine');
+    assert.ok(['missing_openai_api_key', 'llm_failed', 'llm_timeout', 'assumption_draft_fallback'].includes(String(turn.body?.metadata?.reason || '')));
+    assert.ok(Array.isArray(turn.body?.draft?.keyResults));
+    assert.equal(turn.body?.draft?.keyResults?.length, 3);
+    assert.ok((turn.body?.assistantMessage || '').toLowerCase().includes('assum'));
+  } finally {
+    if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorKey;
+  }
+});
+
+test('save route blocks generic draft fallback when transcript has numeric evidence', async () => {
+  const app = createApp();
+  const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+  const sessionRes = await request(app)
+    .post('/api/okr-drafts/sessions')
+    .set(headers)
+    .send({ title: 'Generic-save guard draft' });
+  const draftId = Number(sessionRes.body?.session?.id);
+
+  await request(app)
+    .post(`/api/okr-drafts/${draftId}/chat`)
+    .set(headers)
+    .send({ messages: [{ role: 'user', content: 'Baseline: 20%. Target: 35% by Q3.' }] });
+
+  const saveRes = await request(app)
+    .post(`/api/okr-drafts/${draftId}/versions`)
+    .set(headers)
+    .send({
+      draft: {
+        objective: 'Define a measurable outcome for this period',
+        timeframe: 'Q3 2026',
+        keyResults: [{ title: 'Ship one measurable process improvement', targetValue: 1, currentValue: 0, unit: 'improvement' }]
+      },
+      status: 'saved'
+    });
+
+  assert.equal(saveRes.status, 201);
+  assert.equal(saveRes.body?.qualityGuards?.genericSavePrevented, true);
+  assert.equal(saveRes.body?.qualityGuards?.salvageApplied, true);
+});
+
+test('chat emits loop diagnostics metadata and keeps assistant response usable', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+    const sessionRes = await request(app)
+      .post('/api/okr-drafts/sessions')
+      .set(headers)
+      .send({ title: 'Loop diagnostics draft' });
+
+    const draftId = Number(sessionRes.body?.session?.id);
+
+    const turn1 = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({ messages: [{ role: 'user', content: 'Help me improve delivery.' }] });
+
+    const turn2 = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({
+        messages: [
+          { role: 'user', content: 'Help me improve delivery.' },
+          { role: 'assistant', content: turn1.body?.assistantMessage || '' },
+          { role: 'user', content: 'Still help me improve delivery.' }
+        ]
+      });
+
+    assert.equal(turn2.status, 200);
+    assert.equal(typeof turn2.body?.metadata?.loopRiskScore, 'number');
+    assert.ok(Array.isArray(turn2.body?.metadata?.loopSignals));
+    assert.ok(typeof turn2.body?.assistantMessage === 'string' && turn2.body.assistantMessage.length > 0);
   } finally {
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = priorKey;

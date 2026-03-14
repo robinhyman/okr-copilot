@@ -188,6 +188,38 @@ function parseDraftPayload(body: any) {
   };
 }
 
+function looksGenericDraft(draft: { objective: string; keyResults: Array<{ title: string }> }): boolean {
+  const objective = draft.objective.toLowerCase();
+  const firstKr = draft.keyResults[0]?.title?.toLowerCase() ?? '';
+  return objective.includes('define a measurable outcome') || objective.includes('improve strategic performance') || firstKr.includes('process improvement');
+}
+
+function extractNumericEvidenceFromMessages(messages: OkrConversationMessage[]): string[] {
+  const userText = messages.filter((m) => m.role === 'user').map((m) => m.content).join(' ');
+  const evidence: string[] = [];
+  const baseline = userText.match(/baseline[^\n\.]*\d+(?:\.\d+)?%?/i)?.[0];
+  const target = userText.match(/target[^\n\.]*\d+(?:\.\d+)?%?/i)?.[0] || userText.match(/\bfrom\s+\d+(?:\.\d+)?%?\s+to\s+\d+(?:\.\d+)?%?/i)?.[0];
+  if (baseline) evidence.push(baseline);
+  if (target) evidence.push(target);
+  return evidence;
+}
+
+function salvageDraftFromEvidence(draft: { objective: string; timeframe: string; keyResults: Array<{ title: string; targetValue: number; currentValue: number; unit: string }> }, evidence: string[]) {
+  const baselineMatch = evidence.join(' ').match(/(\d+(?:\.\d+)?)/);
+  const targetMatch = evidence.join(' ').match(/to\s+(\d+(?:\.\d+)?)/i);
+  const baseline = baselineMatch ? Number(baselineMatch[1]) : draft.keyResults[0]?.currentValue ?? 0;
+  const target = targetMatch ? Number(targetMatch[1]) : draft.keyResults[0]?.targetValue ?? Math.max(1, baseline + 1);
+  return {
+    ...draft,
+    objective: draft.objective.toLowerCase().includes('define a measurable outcome')
+      ? 'Improve a defined business outcome using captured baseline and target evidence'
+      : draft.objective,
+    keyResults: draft.keyResults.map((kr, index) => index === 0
+      ? { ...kr, title: `Increase core metric from ${baseline} to ${target}`, currentValue: baseline, targetValue: target }
+      : kr)
+  };
+}
+
 function deriveKrQualityHints(input: { title: string; targetValue: number; currentValue: number; unit: string }, timeframe: string) {
   const hints: string[] = [];
   if (input.title.trim().split(' ').length < 4) hints.push('Make KR title more specific (what metric and by how much).');
@@ -363,17 +395,47 @@ okrsRouter.post('/api/okr-drafts/:id/versions', requireMutatingAuth, async (req,
     }
 
     const status = req.body?.status === 'ready' ? 'ready' : 'saved';
+
+    const latestVersionMetadata = Array.isArray(draft.versions) ? (draft.versions[0]?.metadata_json ?? {}) : {};
+    const transcriptEvidence = Array.isArray((latestVersionMetadata as any)?.transcriptEvidence)
+      ? (latestVersionMetadata as any).transcriptEvidence.filter((v: any) => typeof v === 'string')
+      : [];
+
+    let draftToSave = parsed.input;
+    let qualityGuards = {
+      genericSavePrevented: false,
+      salvageApplied: false,
+      evidenceUsed: transcriptEvidence
+    };
+
+    if (transcriptEvidence.length > 0 && looksGenericDraft(parsed.input)) {
+      draftToSave = salvageDraftFromEvidence(parsed.input, transcriptEvidence);
+      qualityGuards = {
+        genericSavePrevented: true,
+        salvageApplied: true,
+        evidenceUsed: transcriptEvidence
+      };
+
+      if (looksGenericDraft(draftToSave)) {
+        return res.status(422).json({
+          ok: false,
+          error: 'GENERIC_SAVE_BLOCKED_WITH_EVIDENCE',
+          qualityGuards
+        });
+      }
+    }
+
     const version = await appendDraftVersion({
       sessionId: id,
-      draft: parsed.input,
-      metadata: req.body?.metadata,
+      draft: draftToSave,
+      metadata: { ...(req.body?.metadata ?? {}), ...qualityGuards },
       source: req.body?.source === 'restore' ? 'restore' : 'manual_save',
       summary: typeof req.body?.summary === 'string' ? req.body.summary : 'Draft saved',
       actorUserId: actor.userId,
       status
     });
 
-    return res.status(201).json({ ok: true, version });
+    return res.status(201).json({ ok: true, version, qualityGuards });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message ?? 'failed_save_draft' });
   }
@@ -394,10 +456,17 @@ okrsRouter.post('/api/okr-drafts/:id/chat', requireMutatingAuth, async (req, res
     }
 
     const result = await draftProvider.continueConversation(parsed.input);
+    const transcriptEvidence = extractNumericEvidenceFromMessages(parsed.input.messages);
     const persisted = await appendDraftVersion({
       sessionId: id,
       draft: result.draft,
-      metadata: { ...result.metadata, mode: result.mode, missingContext: result.missingContext ?? [] },
+      metadata: {
+        ...result.metadata,
+        mode: result.mode,
+        missingContext: result.missingContext ?? [],
+        transcriptEvidence,
+        draftOnRequestCompliant: result.metadata?.draftOnRequestCompliant ?? false
+      },
       source: 'chat',
       summary: typeof result.assistantMessage === 'string' ? result.assistantMessage.slice(0, 160) : 'Coach refinement',
       actorUserId: actor.userId,

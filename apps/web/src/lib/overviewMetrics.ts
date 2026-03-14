@@ -10,6 +10,9 @@ export type ObjectiveOverviewInput = {
   id: number;
   objective: string;
   timeframe: string;
+  teamId?: string;
+  teamName?: string;
+  ownerLabel?: string;
   keyResults: OverviewKrInput[];
 };
 
@@ -31,6 +34,9 @@ export type ObjectiveMetrics = {
   id: number;
   objective: string;
   timeframe: string;
+  teamId?: string;
+  teamName?: string;
+  ownerLabel?: string;
   progressPercent: number;
   keyResults: OverviewKrMetric[];
 };
@@ -137,6 +143,9 @@ export function buildGroupedOverviewMetrics(objectives: ObjectiveOverviewInput[]
       id: objective.id,
       objective: objective.objective,
       timeframe: objective.timeframe,
+      teamId: objective.teamId,
+      teamName: objective.teamName,
+      ownerLabel: objective.ownerLabel,
       progressPercent,
       keyResults
     } satisfies ObjectiveMetrics;

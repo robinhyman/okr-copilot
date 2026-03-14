@@ -17,6 +17,32 @@ export interface OkrDraftMetadata {
   model?: string;
   reason?: string;
   durationMs: number;
+  loopDetected?: boolean;
+  loopStage?: 'none' | 'detected' | 'multiple_choice' | 'assumption_synthesis';
+  loopRiskScore?: number;
+  loopSignals?: string[];
+  loopEscapePath?: 'assumption_synthesis' | 'multiple_choice';
+  progress?: {
+    known: string[];
+    inferred: string[];
+    missing: string[];
+    unlockItem?: string;
+  };
+  convergence?: {
+    draftOffered: boolean;
+    draftReason: 'user_requested' | 'cap_exceeded' | 'turn_budget' | 'normal';
+    draftOnRequest: boolean;
+    noDraftRateEligible?: boolean;
+  };
+  assumptions?: string[];
+  confidenceByKr?: Array<{ krIndex: number; confidence: number; reasons: string[] }>;
+  sri?: number;
+  unresolvedSlotAge?: number;
+  ttfudTurns?: number;
+  draftOnRequestCompliant?: boolean;
+  genericSavePrevented?: boolean;
+  salvageApplied?: boolean;
+  evidenceUsed?: string[];
 }
 
 export interface OkrDraftResult {
@@ -80,7 +106,7 @@ const DEFAULT_TIMEFRAME = 'Q2 2026';
 const DEFAULT_FOCUS = 'priority area';
 const DEFAULT_UNIT = 'points';
 const MAX_KEY_RESULTS = 5;
-const MAX_MESSAGES = 12;
+const MAX_MESSAGES = 20;
 
 function toNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -221,6 +247,22 @@ function missingFieldQuestion(field: RequiredContextField): string {
   return 'What timeframe should we commit this OKR to?';
 }
 
+function missingFieldShortcut(field: RequiredContextField): string {
+  if (field === 'outcome') return 'Share outcome';
+  if (field === 'strategicWhy') return 'Share business why';
+  if (field === 'baseline') return 'Share baseline';
+  if (field === 'target') return 'Share target';
+  if (field === 'constraints') return 'Share constraints';
+  return 'Set timeframe';
+}
+
+function isNoviceFirstTurn(messages: OkrConversationMessage[]): boolean {
+  const userMessages = messages.filter((m) => m.role === 'user');
+  if (userMessages.length !== 1) return false;
+  const text = userMessages[0].content.toLowerCase();
+  return /new to okr|first time|not sure|help me start|where do i start|never written okr/.test(text);
+}
+
 function normalizeMessageKey(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -265,6 +307,247 @@ function normalizeAssistantMessage(message: string): string {
 
 function isKrFormatValid(title: string): boolean {
   return /^(increase|decrease|reduce|grow|improve)\s.+\sfrom\s.+\sto\s.+$/i.test(title.trim());
+}
+
+function normalizeSemanticText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function tokenize(text: string): Set<string> {
+  return new Set(normalizeSemanticText(text).split(' ').filter((token) => token.length > 2));
+}
+
+function jaccardSimilarity(a: string, b: string): number {
+  const tokensA = tokenize(a);
+  const tokensB = tokenize(b);
+  if (!tokensA.size && !tokensB.size) return 1;
+  let intersection = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) intersection += 1;
+  }
+  const union = new Set([...tokensA, ...tokensB]).size;
+  return union ? intersection / union : 0;
+}
+
+function classifyPromptTheme(text: string): RequiredContextField | 'other' {
+  const lower = normalizeSemanticText(text);
+  if (/(outcome|result|goal|improve|what area)/.test(lower)) return 'outcome';
+  if (/(why|strategic|matter|benefit|priority|now)/.test(lower)) return 'strategicWhy';
+  if (/(baseline|current|from|starting point)/.test(lower)) return 'baseline';
+  if (/(target|to\s+\d|by when|by end)/.test(lower)) return 'target';
+  if (/(constraint|budget|team|resource|limit)/.test(lower)) return 'constraints';
+  if (/(timeframe|quarter|q[1-4]|month|week|deadline)/.test(lower)) return 'timeframe';
+  return 'other';
+}
+
+function answeredFieldMemory(messages: OkrConversationMessage[]): Record<RequiredContextField, boolean> {
+  const userText = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n').toLowerCase();
+  return {
+    outcome: /(outcome|goal|want to|improve|reduce|increase)/.test(userText),
+    strategicWhy: /(why|because|so that|in order to|competitive|retention|market share|margin)/.test(userText),
+    baseline: /(baseline|current|currently|from\s+\d)/.test(userText),
+    target: /(target|to\s+\d|by\s+end|by\s+q[1-4]|within\s+\d)/.test(userText),
+    constraints: /(constraint|constraints|budget|team of|resource|limit)/.test(userText),
+    timeframe: /(timeframe|q[1-4]\s*20\d\d|this quarter|month|weeks?)/.test(userText)
+  };
+}
+
+function isFinalizeNowIntent(text: string): boolean {
+  const lower = text.toLowerCase();
+  return /(final(ise|ize)\s+now|draft\s+now|produce\s+final\s+draft|generate\s+(the\s+)?first\s+full\s+draft|final\s+draft\s+now|just\s+finali[sz]e)/.test(lower);
+}
+
+function buildProgressState(ctx: OkrCoachingContext, missingChecklist: RequiredContextField[]) {
+  const known: string[] = [];
+  const inferred: string[] = [];
+  if (ctx.outcome) known.push(`Outcome: ${ctx.outcome}`);
+  if (ctx.baseline) known.push(`Baseline: ${ctx.baseline}`);
+  if (ctx.constraints) known.push(`Constraints: ${ctx.constraints}`);
+  if (ctx.timeframe) known.push(`Timeframe: ${ctx.timeframe}`);
+  if (ctx.strategicWhy) known.push(`Why now: ${ctx.strategicWhy}`);
+
+  if (!ctx.strategicWhy && ctx.outcome) inferred.push('Strategic rationale inferred from stated outcome');
+  if (!ctx.timeframe) inferred.push('Using default quarter for provisional draft');
+
+  const missing = missingChecklist.map((field) => `${field}`);
+  return { known, inferred, missing, unlockItem: missing[0] };
+}
+
+function estimateSRI(messages: OkrConversationMessage[]): number {
+  const assistant = messages.filter((m) => m.role === 'assistant').map((m) => m.content);
+  if (assistant.length < 2) return 0;
+  const recent = assistant.slice(-4);
+  let total = 0;
+  let pairs = 0;
+  for (let i = 1; i < recent.length; i += 1) {
+    total += jaccardSimilarity(recent[i - 1], recent[i]);
+    pairs += 1;
+  }
+  return pairs ? Math.round((total / pairs) * 1000) / 1000 : 0;
+}
+
+function draftLooksGeneric(draft: OkrDraft): boolean {
+  const objective = draft.objective.toLowerCase();
+  const firstKr = draft.keyResults[0]?.title?.toLowerCase() ?? '';
+  return objective.includes('define a measurable outcome') || objective.includes('improve strategic performance') || firstKr.includes('process improvement');
+}
+
+function buildDraftWithAssumptions(baseDraft: OkrDraft, ctx: OkrCoachingContext): OkrDraft {
+  const timeframe = ctx.timeframe || baseDraft.timeframe || DEFAULT_TIMEFRAME;
+  const objective = ctx.outcome
+    ? `Improve ${ctx.outcome.toLowerCase()} in order to deliver measurable business impact`
+    : 'Improve priority business outcomes in order to deliver measurable business impact';
+  const baselineNum = parseBaselineNumber(ctx.baseline || '0', 0);
+  const unit = parseUnit(`${ctx.baseline || ''} ${ctx.outcome || ''}`);
+
+  const laggingTarget = Math.round((baselineNum || 10) * 1.2);
+  const leadingCurrent = Math.max(1, Math.round((baselineNum || 10) * 0.8));
+  const leadingTarget = Math.max(2, Math.round((baselineNum || 10) * 1.05));
+  const guardrailCurrent = Math.max(1, Math.round((baselineNum || 10) * 0.3));
+  const guardrailTarget = Math.max(1, Math.round((baselineNum || 10) * 0.2));
+
+  const krs = [
+    { title: `Increase primary outcome from ${baselineNum} to ${laggingTarget}`, currentValue: baselineNum, targetValue: laggingTarget, unit },
+    { title: `Increase leading signal from ${leadingCurrent} to ${leadingTarget}`, currentValue: leadingCurrent, targetValue: leadingTarget, unit },
+    { title: `Reduce quality risk from ${guardrailCurrent} to ${guardrailTarget}`, currentValue: guardrailCurrent, targetValue: guardrailTarget, unit }
+  ];
+
+  return normalizeDraftShape({ objective, timeframe, keyResults: krs }, timeframe);
+}
+
+function applyLoopMitigation(input: OkrConversationRequest, result: OkrConversationResult): OkrConversationResult {
+  const safeMessages = sanitizeMessages(input.messages);
+  const assistantHistory = safeMessages.filter((m) => m.role === 'assistant').map((m) => m.content);
+  const recentAssistants = assistantHistory.slice(-4);
+  const previousAssistant = recentAssistants[recentAssistants.length - 1] || '';
+  const lastUserText = [...safeMessages].reverse().find((m) => m.role === 'user')?.content ?? '';
+
+  const proposedTheme = classifyPromptTheme(result.assistantMessage);
+  const previousTheme = classifyPromptTheme(previousAssistant);
+  const sameThemeRepeat = proposedTheme !== 'other' && proposedTheme === previousTheme;
+  const highSimilarity = previousAssistant ? jaccardSimilarity(previousAssistant, result.assistantMessage) >= 0.62 : false;
+  const recentQuestionTurns = safeMessages.slice(-8).filter((m) => m.role === 'assistant').length;
+  const answeredMemory = answeredFieldMemory(safeMessages);
+  const missingFields = (result.missingContext ?? []).map((field) => field === 'target_value' ? 'target' : field) as RequiredContextField[];
+  const missingButAnswered = missingFields.filter((field) => answeredMemory[field]);
+
+  const askCountForTheme = proposedTheme === 'other'
+    ? 0
+    : assistantHistory.filter((text) => classifyPromptTheme(text) === proposedTheme).length;
+  const capExceeded = proposedTheme !== 'other' && askCountForTheme >= 2 && result.mode === 'questions';
+
+  const signals: string[] = [];
+  if (sameThemeRepeat) signals.push('same_theme_repeat');
+  if (highSimilarity) signals.push('semantic_repeat');
+  if (recentQuestionTurns >= 3 && result.mode === 'questions') signals.push('question_streak');
+  if (missingButAnswered.length > 0) signals.push('answered_field_still_missing');
+  if (capExceeded) signals.push('slot_cap_exceeded');
+
+  const loopRiskScore = Math.min(1, signals.length / 3 + (result.mode === 'questions' ? 0.2 : 0));
+  const loopDetected = loopRiskScore >= 0.5 || capExceeded;
+
+  const inferredContext = extractCoachingContext(safeMessages, input.timeframe || DEFAULT_TIMEFRAME);
+  const targetIntent = extractTargetIntent(safeMessages);
+  const missingChecklist = getMissingChecklist(inferredContext, targetIntent);
+  const progress = buildProgressState(inferredContext, missingChecklist);
+  const sri = estimateSRI(safeMessages);
+  const unresolvedSlotAge = missingChecklist.length ? Math.max(1, recentQuestionTurns) : 0;
+  const ttfudTurns = safeMessages.filter((m) => m.role === 'user').length;
+  const finalizeNow = isFinalizeNowIntent(lastUserText);
+  const shouldForceDraft = finalizeNow || capExceeded || (ttfudTurns >= 6 && result.mode === 'questions');
+
+  if (shouldForceDraft) {
+    const draftWithAssumptions = buildDraftWithAssumptions(normalizeDraftShape(result.draft, input.timeframe || DEFAULT_TIMEFRAME), inferredContext);
+    const assumptions = [
+      inferredContext.timeframe ? `Using timeframe ${inferredContext.timeframe}` : 'Using default quarter timeframe',
+      inferredContext.constraints ? `Assuming constraints remain: ${inferredContext.constraints}` : 'Assuming current team capacity and budget constraints',
+      missingChecklist.length ? `Missing slots treated as provisional: ${missingChecklist.join(', ')}` : 'No critical missing slots'
+    ];
+
+    return {
+      ...result,
+      mode: 'refine',
+      questions: [],
+      rationale: [
+        ...(result.rationale ?? []),
+        `Assumptions: ${assumptions.join(' | ')}`,
+        `TBD validation plan: confirm ${missingChecklist.slice(0, 2).join(' and ') || 'metric definitions'} in first two weeks.`
+      ].slice(0, 5),
+      assistantMessage: normalizeAssistantMessage('Drafting now with explicit assumptions so you can finalize. I marked TBDs for anything missing.'),
+      draft: draftWithAssumptions,
+      metadata: {
+        ...result.metadata,
+        loopDetected: true,
+        loopStage: 'assumption_synthesis',
+        loopRiskScore,
+        loopSignals: signals,
+        loopEscapePath: 'assumption_synthesis',
+        progress,
+        assumptions,
+        confidenceByKr: [
+          { krIndex: 0, confidence: 0.7, reasons: ['numeric baseline present'] },
+          { krIndex: 1, confidence: 0.6, reasons: ['leading metric inferred'] },
+          { krIndex: 2, confidence: 0.55, reasons: ['guardrail metric provisional'] }
+        ],
+        convergence: {
+          draftOffered: true,
+          draftReason: finalizeNow ? 'user_requested' : capExceeded ? 'cap_exceeded' : 'turn_budget',
+          draftOnRequest: finalizeNow,
+          noDraftRateEligible: true
+        },
+        sri,
+        unresolvedSlotAge,
+        ttfudTurns,
+        draftOnRequestCompliant: finalizeNow
+      }
+    };
+  }
+
+  if (loopDetected && result.mode === 'questions' && missingFields[0]) {
+    return {
+      ...result,
+      assistantMessage: normalizeAssistantMessage(`Here’s what I heard so far. ${missingFieldQuestion(missingFields[0])} If you prefer, share a quick estimate, give the exact metric, or I can draft now with clear assumptions.`),
+      metadata: {
+        ...result.metadata,
+        loopDetected: true,
+        loopStage: 'multiple_choice',
+        loopRiskScore,
+        loopSignals: signals,
+        loopEscapePath: 'multiple_choice',
+        progress,
+        convergence: {
+          draftOffered: false,
+          draftReason: 'normal',
+          draftOnRequest: false,
+          noDraftRateEligible: true
+        },
+        sri,
+        unresolvedSlotAge,
+        ttfudTurns
+      }
+    };
+  }
+
+  return {
+    ...result,
+    metadata: {
+      ...result.metadata,
+      loopDetected,
+      loopStage: loopDetected ? 'detected' : 'none',
+      loopRiskScore,
+      loopSignals: signals,
+      progress,
+      convergence: {
+        draftOffered: result.mode === 'refine',
+        draftReason: 'normal',
+        draftOnRequest: false,
+        noDraftRateEligible: true
+      },
+      sri,
+      unresolvedSlotAge,
+      ttfudTurns
+    }
+  };
 }
 
 function parseBaselineNumber(baseline: string, fallback: number): number {
@@ -374,6 +657,57 @@ class DeterministicDraftProvider {
     const shouldProbe = missingChecklist.length > 0;
 
     if (shouldProbe) {
+      const userTurns = safeMessages.filter((m) => m.role === 'user').length;
+      const lastThreeUserMessages = safeMessages.filter((m) => m.role === 'user').slice(-3).map((m) => normalizeSemanticText(m.content));
+      const repeatedUserInput = lastThreeUserMessages.length >= 2 && new Set(lastThreeUserMessages).size <= 2;
+      const finalizeNow = isFinalizeNowIntent(instruction);
+      const shouldDraftWithAssumptions = finalizeNow || userTurns >= 6 || (userTurns >= 4 && repeatedUserInput);
+
+      if (isNoviceFirstTurn(safeMessages)) {
+        const firstMissing = missingChecklist[0] ?? 'outcome';
+        const secondMissing = missingChecklist[1];
+        return {
+          assistantMessage: normalizeAssistantMessage(`${missingFieldQuestion(firstMissing)} Keep it simple; one sentence is enough.`),
+          mode: 'questions',
+          questions: [
+            missingFieldShortcut(firstMissing),
+            secondMissing ? missingFieldShortcut(secondMissing) : 'Draft now'
+          ],
+          rationale: ['First-time user detected; switched to guided shortcuts to reduce blank-page friction.'],
+          coachingContext,
+          missingContext,
+          draft: normalizeDraftShape(revisedDraft, timeframe),
+          metadata: {
+            source: 'fallback',
+            provider: 'deterministic',
+            reason: 'novice_guided_entry',
+            durationMs: 0
+          }
+        };
+      }
+
+      if (shouldDraftWithAssumptions) {
+        const draftWithAssumptions = buildDraftWithAssumptions(revisedDraft, coachingContext);
+        return {
+          assistantMessage: normalizeAssistantMessage('I drafted a first usable OKR with explicit assumptions so you can refine from something concrete.'),
+          mode: 'refine',
+          questions: [],
+          rationale: [
+            'Used assumption-based draft because key context remained incomplete after multiple turns.',
+            `Missing context to confirm next: ${missingChecklist.slice(0, 2).join(', ') || 'none'}.`
+          ],
+          coachingContext,
+          missingContext,
+          draft: draftWithAssumptions,
+          metadata: {
+            source: 'fallback',
+            provider: 'deterministic',
+            reason: 'assumption_draft_fallback',
+            durationMs: 0
+          }
+        };
+      }
+
       const questions = missingChecklist.map(missingFieldQuestion).slice(0, 2);
       return {
         assistantMessage: normalizeAssistantMessage(ensureNonLoopingAssistantMessage({
@@ -568,7 +902,7 @@ class OpenAiDraftProvider {
       {
         role: 'system',
         content:
-          'You are an OKR design coach for leaders. Your job is to run a structured coaching conversation that produces strong, measurable OKRs (not generic drafts). Strict interaction rules: ask exactly ONE question at a time, wait for user input, and work on ONE OKR at a time. Start each new session by clarifying intent and scope before measurement: ask whether the user wants to create company, department/team, or single-OKR work, or review/critique an existing OKR. If user asks for multiple OKRs, guide back to one objective at a time. Use this sequence strictly: Pass 1 Outcome + Strategic Intent, Pass 2 Measurement Discovery, Pass 3 Draft + Stress Test. Pass 1 must be completed before Pass 2: confirm strategic priority, business problem, desired behavior/performance change, who benefits, and why now. Do not draft objective or KRs until Pass 1 is clear. If objective is tactical/incremental, challenge constructively and refine toward meaningful outcome. Objective must be qualitative, strategic, precise; objective format target: We will <objective> in order to <strategic purpose>. Pass 2: identify 2-4 candidate outcome metrics before final KR selection; prefer customer/business/operational outcomes, reject activity metrics. Capture baseline + target + timeframe + constraints for selected metrics. If baseline unknown, ask for it; if unavailable, mark baseline as TBD with a concrete measurement plan or proxy. Pass 3: draft and stress-test. KR titles must follow: <direction> <metric> from <from-value> to <to-value>. Build a balanced KR set with at least one lagging outcome KR, one leading indicator KR, and one guardrail KR. Reject weak KRs (unclear metric or missing baseline/target). Run Goodhart/Campbell risk check and suggest complementary metrics when gaming/distortion risk exists. Present draft in this structure inside rationale/draft fields: objective, short strategic rationale, KRs, risk notes, and optional initiatives explicitly labeled as not part of OKR. Keep tone calm, direct, practical; avoid enthusiastic filler unless user uses it first. Keep assistantMessage concise for mobile: in questions mode, one clear question plus at most one short sentence; in refine mode, max 3 short sentences. Put detail in rationale, not assistantMessage. Avoid repetition and never ask the same question verbatim in consecutive turns. Return JSON only with keys: assistantMessage (string), mode ("questions"|"refine"), questions (string[]), rationale (string[] max 5), coachingContext (object with outcome, strategicWhy, baseline, constraints, timeframe), missingContext (string[]), and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep edits minimal unless user asks for reset.'
+          'You are an expert OKR Coach helping leaders craft strategic, measurable OKRs. Tone: calm, direct, practical. Avoid enthusiastic filler openers (e.g. "Great", "Awesome", "Perfect") unless the user explicitly uses that tone. Start broad, then progressively sharpen. Use staged discovery: (1) context and intent, (2) strategic why/business reason, (3) desired outcome, (4) baseline/current reality, (5) target + timeframe + constraints, (6) draft and refine. Ask 1-2 focused questions per turn when needed, but do not interrogate unnecessarily if the user has already provided sufficient context. Before producing a serious draft objective, confirm the strategic why (e.g. competitiveness, cost, market share, customer experience). If user gives an activity goal, translate it to an outcome-led objective with explicit business impact. Ask what must not get worse. Build a balanced KR set with at least one lagging outcome KR, one leading indicator KR, and one guardrail KR. CRITICAL KR TITLE FORMAT: each key result title must follow <direction> <metric> from <from-value> to <to-value> (e.g. increase employee engagement score from 5 to 7). Keep assistantMessage concise for mobile: in questions mode, ask at most two focused questions with minimal filler; in refine mode, max 4 short sentences. Move detail into rationale, not assistantMessage. Avoid repetitive prompts and never repeat the same question verbatim in consecutive turns. Return JSON only with keys: assistantMessage (string), mode ("questions"|"refine"), questions (string[]), rationale (string[] max 5), coachingContext (object with outcome, strategicWhy, baseline, constraints, timeframe), missingContext (string[]), and draft (object with objective, timeframe, keyResults[{title,targetValue,currentValue,unit}]). Keep edits minimal unless asked for a reset.'
       },
       {
         role: 'user',
@@ -616,7 +950,15 @@ class OpenAiDraftProvider {
       : missingChecklist.map((field) => (field === 'target' ? 'target_value' : field));
 
     const hasBadKrFormat = normalizedDraft.keyResults.some((kr) => !isKrFormatValid(kr.title));
-    const gatedMode = missingChecklist.length > 0 || hasBadKrFormat ? 'questions' : payload.mode === 'questions' ? 'questions' : 'refine';
+    const userTurns = safeMessages.filter((message) => message.role === 'user').length;
+    const lastUserText = [...safeMessages].reverse().find((message) => message.role === 'user')?.content ?? '';
+    const finalizeNow = isFinalizeNowIntent(lastUserText);
+    const strictQuestionGate = (missingChecklist.length >= 3 && userTurns < 3 && !finalizeNow) || (hasBadKrFormat && userTurns < 3 && !finalizeNow);
+    const gatedMode = strictQuestionGate
+      ? 'questions'
+      : payload.mode === 'questions'
+        ? 'questions'
+        : 'refine';
 
     const assistantMessageRaw =
       typeof payload.assistantMessage === 'string' && payload.assistantMessage.trim()
@@ -747,10 +1089,11 @@ class ResilientDraftProvider implements OkrDraftProvider {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.llmProvider.continueConversation(input);
+        const mitigated = applyLoopMitigation(input, result);
         return {
-          ...result,
+          ...mitigated,
           metadata: {
-            ...result.metadata,
+            ...mitigated.metadata,
             durationMs: Date.now() - startedAt
           }
         };
@@ -763,9 +1106,11 @@ class ResilientDraftProvider implements OkrDraftProvider {
     }
 
     const fallback = this.fallbackProvider.continueConversation(input);
+    const mitigatedFallback = applyLoopMitigation(input, fallback);
     return {
-      ...fallback,
+      ...mitigatedFallback,
       metadata: {
+        ...mitigatedFallback.metadata,
         source: 'fallback',
         provider: 'deterministic',
         reason: lastError?.name === 'AbortError' ? 'llm_timeout' : (lastError?.message ?? 'llm_failed'),

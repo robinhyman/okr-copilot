@@ -107,6 +107,15 @@ echo "[deploy] starting web (logs: $WEB_LOG)"
 WEB_PID=$!
 
 wait_http "api" "http://127.0.0.1:${API_PORT}/health" 90 1
+
+SEED_DEMO_ON_DEPLOY="${SEED_DEMO_ON_DEPLOY:-1}"
+if [[ "$SEED_DEMO_ON_DEPLOY" != "0" ]]; then
+  echo "[deploy] seeding demo data"
+  API_BASE_URL="http://127.0.0.1:${API_PORT}" AUTH_TOKEN="dev-stub-token" "$ROOT_DIR/scripts/seed-demo.sh"
+else
+  echo "[deploy] skipping demo seed (SEED_DEMO_ON_DEPLOY=0)"
+fi
+
 wait_http "web" "http://127.0.0.1:${WEB_PORT}/overview" 90 1
 
 "$ROOT_DIR/scripts/smoke-local.sh"

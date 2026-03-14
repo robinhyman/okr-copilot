@@ -97,6 +97,7 @@ This is now required for every increment that changes user-facing behavior.
 Include all of the following in the increment demo note:
 - Persona walkthrough transcript snippets
 - Screenshot set (key states and outcomes)
+- Runtime walkthrough notes (what was clicked/run and observed)
 - API evidence snippets (especially AI metadata and role-scoped payloads)
 - PASS/PARTIAL/FAIL verdict with rationale
 - Follow-up fixes if verdict is PARTIAL/FAIL
