@@ -119,6 +119,45 @@ Codifying scenario diversity + mandatory retro steps in operating docs will prev
 - When context is incomplete but user wants momentum, draft fallback is clearer and easier to refine.
 - Loop-escape still works, with concise guidance and assumption-based drafting when needed.
 
+## Iteration 5 (chip fallback + process controls)
+1) **Hypothesis**  
+If model-generated questions sanitize down to nothing, context-aware fallback shortcuts keep the UI useful and visible in broad strategic coaching prompts.
+
+2) **Changes shipped**  
+- `apps/web/src/lib/coachPrompts.ts`
+  - Added context-aware strategic fallback shortcut sets (delivery, quality, cost, customer, default).
+  - Added fallback selection keyed by assistant/question context keywords.
+  - Added hard fallback when sanitized candidates collapse to empty, preserving 2–5 word constraints and no question stems.
+- `apps/web/src/lib/coachPrompts.test.ts`
+  - Added explicit regression tests for empty-after-sanitization scenarios (delivery and customer contexts).
+- `docs/development-operating-system.md`
+  - Added **UI Change Evidence Gate**.
+  - Added **Coordinator verification checklist** (code/tests + runtime + visual required before “ready”).
+  - Added sanitizer-collapse **regression guard** rule.
+- `docs/product-increment-delivery-standard.md`
+  - Added mandatory runtime walkthrough notes to the evidence pack.
+
+3) **Visual/runtime evidence (realistic scenarios)**  
+Generated via Playwright runtime walkthrough script (`tmp/capture-chip-scenarios.mjs`):
+- `artifacts/screenshots/chip-fallback-v2/scenario-1-strategic-fallback-cost.png`  
+  Broad strategic prompt resulted in visible shortcut chips (`Lower cost to serve`, `Improve quality`, `Other focus`).
+- `artifacts/screenshots/chip-fallback-v2/scenario-2-delivery-fallback.png`  
+  Delivery-focused prompt produced delivery-context shortcuts (`Speed up delivery`, `Improve quality`, `Other focus`).
+- `artifacts/screenshots/chip-fallback-v2/scenario-3-chip-click-inserts-only.png`  
+  Clicking a chip inserts into composer for edit and **does not auto-send** (verified by unchanged user-message count in script assertion).
+
+4) **Validation results (tests/checks)**  
+- `npm run test -w @okr-copilot/web` ✅
+- Runtime walkthrough script: `node tmp/capture-chip-scenarios.mjs` ✅
+
+5) **Retro: worked / didn’t / changes adopted**  
+- Worked: fallback intents keep chips present and concise in strategic prompts where model questions sanitize out.
+- Didn’t: prior process allowed “tests pass” confidence without visible runtime proof.
+- Adopted:
+  - UI changes now require screenshot + runtime walkthrough evidence.
+  - “Ready” status now requires coordinator signoff on code/tests, runtime behavior, and visual confirmation.
+  - Sanitizer-empty regressions now require explicit minimum-output tests.
+
 ## Demo readiness
 - Local demo web URL: `http://127.0.0.1:5173/overview`
 - Local health URL: `http://127.0.0.1:4000/health`

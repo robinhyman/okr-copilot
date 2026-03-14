@@ -16,6 +16,22 @@ test('buildCoachPromptChips keeps concise shortcuts only', () => {
   assert.deepEqual(chips.sort(), ['Draft now with assumptions', 'Use estimate'].sort());
 });
 
+test('buildCoachPromptChips adds strategic fallbacks when sanitized list is empty', () => {
+  const delivery = buildCoachPromptChips({
+    assistantMessage: 'What strategic outcomes matter most for delivery speed this quarter?',
+    questions: ['What would success look like?', 'How should we measure this?']
+  });
+
+  assert.deepEqual(delivery, ['Speed up delivery', 'Improve quality', 'Other focus']);
+
+  const customer = buildCoachPromptChips({
+    assistantMessage: 'Which customer pain points should we prioritize?',
+    questions: ['Can you share your top risk?', 'How will success be measured?']
+  });
+
+  assert.deepEqual(customer, ['Reduce customer issues', 'Improve quality', 'Other focus']);
+});
+
 test('buildCoachPromptChips QA matrix across novice contexts', () => {
   const scenarios = [
     {

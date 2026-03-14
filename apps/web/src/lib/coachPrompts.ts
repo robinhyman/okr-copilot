@@ -3,6 +3,14 @@ const MIN_CHIP_WORDS = 2;
 const MAX_CHIP_WORDS = 5;
 const MAX_CHIP_CHARS = 36;
 
+const STRATEGIC_FALLBACKS = {
+  default: ['Improve outcomes', 'Reduce customer issues', 'Other focus'],
+  delivery: ['Speed up delivery', 'Improve quality', 'Other focus'],
+  quality: ['Improve quality', 'Reduce customer issues', 'Other focus'],
+  cost: ['Lower cost to serve', 'Improve quality', 'Other focus'],
+  customer: ['Reduce customer issues', 'Improve quality', 'Other focus']
+} as const;
+
 function compact(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
@@ -37,11 +45,30 @@ function scoreCandidate(raw: string): number {
   return score;
 }
 
+function fallbackKey(input: { assistantMessage?: string; questions?: string[] }): keyof typeof STRATEGIC_FALLBACKS {
+  const haystack = `${input.assistantMessage ?? ''} ${(input.questions ?? []).join(' ')}`.toLowerCase();
+  if (/\b(delivery|ship|release|cycle time|lead time|execution|throughput|velocity)\b/.test(haystack)) return 'delivery';
+  if (/\b(defect|quality|rework|incident|reliability|error)\b/.test(haystack)) return 'quality';
+  if (/\b(cost|budget|efficiency|margin|opex|expense|spend)\b/.test(haystack)) return 'cost';
+  if (/\b(customer|support|churn|retention|satisfaction|nps|complaint)\b/.test(haystack)) return 'customer';
+  return 'default';
+}
+
+function strategicFallbacks(input: { assistantMessage?: string; questions?: string[] }): string[] {
+  return STRATEGIC_FALLBACKS[fallbackKey(input)]
+    .map(sanitizeCandidate)
+    .filter(isValidShortcut);
+}
+
 export function buildCoachPromptChips(input: { questions?: string[]; assistantMessage?: string }): string[] {
   const candidates = (input.questions ?? [])
     .map(sanitizeCandidate)
     .filter(isValidShortcut)
     .sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+
+  if (!candidates.length) {
+    return strategicFallbacks(input).slice(0, MAX_CHIPS);
+  }
 
   const seen = new Set<string>();
   const chips: string[] = [];
@@ -52,6 +79,10 @@ export function buildCoachPromptChips(input: { questions?: string[]; assistantMe
     seen.add(key);
     chips.push(chip);
     if (chips.length >= MAX_CHIPS) break;
+  }
+
+  if (!chips.length) {
+    return strategicFallbacks(input).slice(0, MAX_CHIPS);
   }
 
   return chips;

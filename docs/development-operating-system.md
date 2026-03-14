@@ -36,9 +36,19 @@ No “done” claim unless all pass:
 - required seeded data checks pass,
 - persona validation checks pass for in-scope roles,
 - evidence note exists,
-- **`npm run done:proof` passes** (API live + Web live + populated data checks).
+- **`npm run done:proof` passes** (API live + Web live + populated data checks),
+- **UI Change Evidence Gate**: any UI-affecting increment includes screenshot proof + runtime walkthrough notes in the increment evidence note.
 
 If `done:proof` fails, status must be reported as **NOT DONE**.
+
+## 4.1) Coordinator verification checklist (mandatory before “ready”)
+
+Before declaring an increment ready for Robin inspection, explicitly verify and record:
+1. Code + automated checks (typecheck/build/tests relevant to scope)
+2. Runtime behavior in the running app/API (not test-only)
+3. Visual confirmation (screenshots of key changed states)
+
+If any one of the three is missing, status must be **NOT READY**.
 
 ## 5) Required evidence artifact
 
@@ -87,6 +97,7 @@ For any coach-flow quality iteration pack:
 - run multiple realistic novice scenarios from different business contexts (not one persona only),
 - keep deterministic logic boundary-first (avoid heavy mid-conversation state machines),
 - if suggestion chips are used, keep them to concise user-input shortcuts (few words, no auto-send, no long prose duplicates),
+- **regression guard**: when any sanitizer/filter can collapse a UI element list to empty, add explicit tests that enforce a minimum useful output for key scenarios,
 - include mandatory per-iteration retrospective (`worked / didn’t / changes adopted`),
 - apply process fixes from retros into docs when repeated issues are found,
 - maintain local demo readiness (health endpoint up + seeded non-empty demo data).
