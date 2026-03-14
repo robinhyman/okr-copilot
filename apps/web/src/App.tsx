@@ -166,6 +166,7 @@ export function App() {
   const sessionStartRef = useRef<number | null>(null);
   const modalOpenRef = useRef<number | null>(null);
   const exposureSentRef = useRef(false);
+  const chatComposerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const persona = PERSONAS.find((x) => x.key === personaKey) ?? PERSONAS[0];
   const actorHeaders = { 'x-auth-user-id': persona.userId, 'x-auth-team-id': persona.teamId };
@@ -592,6 +593,22 @@ export function App() {
     : null;
   const thinkingElapsedSeconds = coachThinkingSinceMs ? Math.max(0, Math.floor((Date.now() - coachThinkingSinceMs) / 1000)) : null;
 
+  function handlePromptChipClick(prompt: string, promptIndex: number) {
+    void trackUiEvent('coach_prompt_chip_clicked', {
+      flow: currentMode,
+      prompt_index: promptIndex,
+      prompt_length: prompt.length
+    });
+    setChatInput(prompt);
+    window.requestAnimationFrame(() => {
+      const composer = chatComposerRef.current;
+      if (!composer) return;
+      composer.focus();
+      const caret = prompt.length;
+      composer.setSelectionRange(caret, caret);
+    });
+  }
+
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter') return;
     if (isComposingInput || event.nativeEvent.isComposing) return;
@@ -697,12 +714,7 @@ export function App() {
                               className="secondary"
                               disabled={isCoachThinking || isStartingCoachSession}
                               onClick={() => {
-                                void trackUiEvent('coach_prompt_chip_clicked', {
-                                  flow: currentMode,
-                                  prompt_index: idx,
-                                  prompt_length: prompt.length
-                                });
-                                void sendChatTurn(prompt);
+                                handlePromptChipClick(prompt, idx);
                               }}
                             >
                               {prompt}
@@ -712,6 +724,7 @@ export function App() {
                       ) : null}
                       <div className="row">
                         <textarea
+                          ref={chatComposerRef}
                           value={chatInput}
                           rows={3}
                           disabled={isCoachThinking || isStartingCoachSession}
