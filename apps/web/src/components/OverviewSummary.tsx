@@ -3,6 +3,8 @@ import type { KrStatus, OverviewMetrics } from '../lib/overviewMetrics';
 type OverviewSummaryProps = {
   role?: 'manager' | 'team_member' | 'senior_leader';
   metrics: OverviewMetrics;
+  selectedTeamId?: string | null;
+  onClearTeamSelection?: () => void;
   onRequestKrCheckin?: (input: { krId: number; krTitle: string; objective: string; currentValue: number; targetValue: number; unit: string }) => void;
 };
 
@@ -37,7 +39,13 @@ function ProgressBar({
   );
 }
 
-export function OverviewSummary({ role = 'manager', metrics, onRequestKrCheckin }: OverviewSummaryProps) {
+export function OverviewSummary({
+  role = 'manager',
+  metrics,
+  selectedTeamId = null,
+  onClearTeamSelection,
+  onRequestKrCheckin
+}: OverviewSummaryProps) {
   if (!metrics.totalKrs) {
     return (
       <section className="panel nested" data-testid="overview-summary-empty">
@@ -67,9 +75,15 @@ export function OverviewSummary({ role = 'manager', metrics, onRequestKrCheckin 
     return acc;
   }, new Map<string, { teamId: string; teamName: string; ownerLabel: string; objectives: typeof metrics.byObjective }>());
 
-  const objectiveGroups = role === 'senior_leader'
+  const allObjectiveGroups = role === 'senior_leader'
     ? Array.from(groupedByTeam.values()).sort((a, b) => a.teamName.localeCompare(b.teamName))
     : [{ teamId: 'all', teamName: '', ownerLabel: '', objectives: metrics.byObjective }];
+
+  const objectiveGroups = role === 'senior_leader' && selectedTeamId
+    ? allObjectiveGroups.filter((group) => group.teamId === selectedTeamId)
+    : allObjectiveGroups;
+
+  const selectedTeam = selectedTeamId ? allObjectiveGroups.find((group) => group.teamId === selectedTeamId) : null;
 
   return (
     <section className="panel nested" data-testid="overview-summary">
@@ -138,7 +152,21 @@ export function OverviewSummary({ role = 'manager', metrics, onRequestKrCheckin 
         <p className="muted">Each objective shows its overall progress and KR contributors.</p>
       </div>
 
-      {objectiveGroups.map((group) => (
+      {role === 'senior_leader' && selectedTeam ? (
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }} data-testid="overview-team-filter-banner">
+          <p className="muted">Showing objectives for {selectedTeam.teamName}</p>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onClearTeamSelection?.()}
+            aria-label="Reset overview team filter"
+          >
+            Reset team filter
+          </button>
+        </div>
+      ) : null}
+
+      {objectiveGroups.length ? objectiveGroups.map((group) => (
         <section key={group.teamId} data-testid={`objective-team-group-${group.teamId}`}>
           {role === 'senior_leader' ? (
             <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -217,7 +245,9 @@ export function OverviewSummary({ role = 'manager', metrics, onRequestKrCheckin 
             })}
           </div>
         </section>
-      ))}
+      )) : (
+        <p className="muted" data-testid="overview-team-filter-empty">No objectives found for the selected team.</p>
+      )}
     </section>
   );
 }

@@ -50,15 +50,55 @@ test('OverviewSummary renders grouped objective sections with objective and KR g
     }
   ]);
 
-  const html = renderToStaticMarkup(createElement(OverviewSummary, { metrics, role: 'senior_leader' }));
+  const html = renderToStaticMarkup(createElement(OverviewSummary, {
+    metrics,
+    role: 'senior_leader',
+    selectedTeamId: 'team_sales'
+  }));
   assert.match(html, /Sales Team/);
   assert.match(html, /Owner: VP Sales/);
-  assert.match(html, /Product Team/);
+  assert.doesNotMatch(html, /Owner: VP Product/);
+  assert.match(html, /Showing objectives for Sales Team/);
+  assert.match(html, /Reset team filter/);
   assert.match(html, /Grow pipeline/);
   assert.match(html, /Book intros/);
+  assert.doesNotMatch(html, /Retention/);
   assert.match(html, /data-testid="objective-progress-1"/);
-  assert.match(html, /data-testid="objective-progress-2"/);
+  assert.doesNotMatch(html, /data-testid="objective-progress-2"/);
   assert.match(html, /data-testid="kr-progress-1-11"/);
   assert.match(html, /data-testid="kr-progress-1-12"/);
-  assert.match(html, /data-testid="kr-progress-2-21"/);
+  assert.doesNotMatch(html, /data-testid="kr-progress-2-21"/);
+});
+
+test('OverviewSummary manager view ignores selected team filter', () => {
+  const metrics = buildGroupedOverviewMetrics([
+    {
+      id: 1,
+      objective: 'Grow pipeline',
+      timeframe: 'Q2',
+      teamId: 'team_sales',
+      teamName: 'Sales Team',
+      ownerLabel: 'Owner: VP Sales',
+      keyResults: [{ id: 11, title: 'Book intros', currentValue: 3, targetValue: 10, unit: 'calls' }]
+    },
+    {
+      id: 2,
+      objective: 'Retention',
+      timeframe: 'Q2',
+      teamId: 'team_product',
+      teamName: 'Product Team',
+      ownerLabel: 'Owner: VP Product',
+      keyResults: [{ id: 21, title: 'NPS', currentValue: 40, targetValue: 50, unit: 'score' }]
+    }
+  ]);
+
+  const html = renderToStaticMarkup(createElement(OverviewSummary, {
+    metrics,
+    role: 'manager',
+    selectedTeamId: 'team_sales'
+  }));
+
+  assert.match(html, /Grow pipeline/);
+  assert.match(html, /Retention/);
+  assert.doesNotMatch(html, /Showing objectives for Sales Team/);
 });

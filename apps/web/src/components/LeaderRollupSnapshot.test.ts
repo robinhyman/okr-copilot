@@ -18,7 +18,10 @@ test('LeaderRollupSnapshot renders donut and team segment tooltips with count an
     ]
   };
 
-  const html = renderToStaticMarkup(createElement(LeaderRollupSnapshot, { rollup }));
+  const html = renderToStaticMarkup(createElement(LeaderRollupSnapshot, {
+    rollup,
+    selectedTeamId: 'team_sales'
+  }));
 
   assert.match(html, /<title>On track: 8 KRs \(53%\)<\/title>/);
   assert.match(html, /<title>At risk: 5 KRs \(33%\)<\/title>/);
@@ -33,4 +36,8 @@ test('LeaderRollupSnapshot renders donut and team segment tooltips with count an
   assert.match(html, /title="Sales Team • Off track: 1 KRs \(20%\)"/);
 
   assert.match(html, /Needs attention now/);
+  assert.match(html, /Filtered to Sales Team/);
+  assert.match(html, /Clear filter/);
+  assert.match(html, /aria-pressed="true"/);
+  assert.match(html, /aria-label="Filter objectives for Product Team"/);
 });

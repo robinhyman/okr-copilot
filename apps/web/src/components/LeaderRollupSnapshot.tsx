@@ -16,6 +16,9 @@ type LeaderRollup = {
 
 type LeaderRollupSnapshotProps = {
   rollup: LeaderRollup;
+  selectedTeamId?: string | null;
+  onSelectTeam?: (teamId: string) => void;
+  onClearTeamSelection?: () => void;
 };
 
 const STATUS_META = [
@@ -56,7 +59,12 @@ function teamNeedsAttention(team: TeamRollup): boolean {
   return team.offTrack > 0 || team.atRisk > 0;
 }
 
-export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
+export function LeaderRollupSnapshot({
+  rollup,
+  selectedTeamId = null,
+  onSelectTeam,
+  onClearTeamSelection
+}: LeaderRollupSnapshotProps) {
   const latestWeek = rollup.trend[rollup.trend.length - 1];
   const previousWeek = rollup.trend[rollup.trend.length - 2];
   const latestOnTrackRatio = latestWeek ? latestWeek.onTrack / Math.max(1, weekTotal(latestWeek)) : 0;
@@ -80,6 +88,9 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
 
   const needsAttentionTeams = sortedTeams.filter(teamNeedsAttention);
   const stableTeams = sortedTeams.filter((team) => !teamNeedsAttention(team));
+  const selectedTeamMeta = selectedTeamId
+    ? sortedTeams.find((team) => team.teamId === selectedTeamId)
+    : null;
 
   const overallTotal = Math.max(1, overallCounts.onTrack + overallCounts.atRisk + overallCounts.offTrack);
   const donutSegments = [
@@ -95,6 +106,7 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
   const renderTeamRow = (team: TeamRollup) => {
     const total = Math.max(1, totalForTeam(team));
     const meta = teamDisplayMeta(team);
+    const isSelected = selectedTeamId === team.teamId;
     const segments = [
       { key: 'onTrack', label: 'On track', className: 'on-track', value: team.onTrack },
       { key: 'atRisk', label: 'At risk', className: 'needs-attention', value: team.atRisk },
@@ -103,24 +115,32 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
 
     return (
       <li key={team.teamId} className="leader-team-row" data-testid={`leader-team-${team.teamId}`}>
-        <div className="leader-team-row-meta">
-          <div>
-            <strong>{meta.teamName}</strong>
-            <div className="muted">{meta.ownerLabel}</div>
-            <div className="muted">{team.teamId}</div>
+        <button
+          type="button"
+          className="leader-team-button"
+          aria-pressed={isSelected}
+          aria-label={`Filter objectives for ${meta.teamName}`}
+          onClick={() => onSelectTeam?.(team.teamId)}
+        >
+          <div className="leader-team-row-meta">
+            <div>
+              <strong>{meta.teamName}</strong>
+              <div className="muted">{meta.ownerLabel}</div>
+              <div className="muted">{team.teamId}</div>
+            </div>
+            <span className="muted">{totalForTeam(team)} KRs</span>
           </div>
-          <span className="muted">{totalForTeam(team)} KRs</span>
-        </div>
-        <div className="leader-stack" role="img" aria-label={`${meta.teamName} ownership and health breakdown`}>
-          {segments.map((segment) => (
-            <span
-              key={segment.key}
-              className={`leader-stack-segment ${segment.className}`}
-              style={{ width: `${(segment.value / total) * 100}%` }}
-              title={`${meta.teamName} • ${segment.label}: ${segment.value} KRs (${formatPercent(segment.value, total)}%)`}
-            />
-          ))}
-        </div>
+          <div className="leader-stack" role="img" aria-label={`${meta.teamName} ownership and health breakdown`}>
+            {segments.map((segment) => (
+              <span
+                key={segment.key}
+                className={`leader-stack-segment ${segment.className}`}
+                style={{ width: `${(segment.value / total) * 100}%` }}
+                title={`${meta.teamName} • ${segment.label}: ${segment.value} KRs (${formatPercent(segment.value, total)}%)`}
+              />
+            ))}
+          </div>
+        </button>
       </li>
     );
   };
@@ -130,6 +150,21 @@ export function LeaderRollupSnapshot({ rollup }: LeaderRollupSnapshotProps) {
       <div className="leader-rollup-header">
         <h3>Senior leader rollup snapshot</h3>
         <p className="muted">Cross-team execution health and ownership at a glance</p>
+        {selectedTeamMeta ? (
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+            <p className="muted" data-testid="leader-selected-team">
+              Filtered to {teamDisplayMeta(selectedTeamMeta).teamName}
+            </p>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => onClearTeamSelection?.()}
+              aria-label="Clear selected team filter"
+            >
+              Clear filter
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="leader-rollup-grid">
