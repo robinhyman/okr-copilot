@@ -1,5 +1,5 @@
 const MAX_CHIPS = 3;
-const MIN_CHIP_WORDS = 2;
+const MIN_CHIP_WORDS = 1;
 const MAX_CHIP_WORDS = 5;
 const MAX_CHIP_CHARS = 36;
 
@@ -10,6 +10,34 @@ const STRATEGIC_FALLBACKS = {
   cost: ['Lower cost to serve', 'Improve quality', 'Other focus'],
   customer: ['Reduce customer issues', 'Improve quality', 'Other focus']
 } as const;
+
+const STRATEGIC_OPTION_CHIPS = [
+  {
+    key: 'competitiveness',
+    label: 'Competitiveness',
+    pattern: /\b(competit(?:ive|iveness)|market position|market share|differentiation)\b/i
+  },
+  {
+    key: 'time_to_market',
+    label: 'Time-to-market',
+    pattern: /(time\s*-?\s*to\s*-?\s*market|\bttm\b|speed\s*to\s*market|faster launches?|launch speed)/i
+  },
+  {
+    key: 'delivery_cost',
+    label: 'Delivery cost',
+    pattern: /\b(delivery\s*cost|cost\s*to\s*deliver|reduce\s*(delivery\s*)?cost|lower\s*(delivery\s*)?cost|cost\s*efficiency)\b/i
+  },
+  {
+    key: 'customer_responsiveness',
+    label: 'Customer responsiveness',
+    pattern: /\b(customer\s*responsiveness|customer\s*response|respond\s*to\s*customers?|customer\s*needs?|customer\s*feedback)\b/i
+  },
+  {
+    key: 'quality',
+    label: 'Quality',
+    pattern: /\b(quality|reliability|defect|rework|stability)\b/i
+  }
+] as const;
 
 function compact(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
@@ -60,7 +88,34 @@ function strategicFallbacks(input: { assistantMessage?: string; questions?: stri
     .filter(isValidShortcut);
 }
 
+function semanticStrategicChips(input: { assistantMessage?: string; questions?: string[] }): string[] {
+  const haystack = `${input.assistantMessage ?? ''} ${(input.questions ?? []).join(' ')}`;
+  if (!haystack.trim()) return [];
+
+  const matches: Array<{ label: string; index: number; order: number }> = [];
+  STRATEGIC_OPTION_CHIPS.forEach((option, index) => {
+    const match = option.pattern.exec(haystack);
+    if (match) matches.push({ label: option.label, index: match.index, order: index });
+  });
+
+  const orderedMatches = matches
+    .sort((a, b) => a.index - b.index || a.order - b.order)
+    .map((match) => match.label);
+
+  if (orderedMatches.length >= 3 && !orderedMatches.includes('Quality')) {
+    orderedMatches.push('Quality');
+  }
+
+  const seen = new Set<string>();
+  return orderedMatches
+    .map(sanitizeCandidate)
+    .filter((chip) => isValidShortcut(chip) && !seen.has(chip.toLowerCase()) && seen.add(chip.toLowerCase()));
+}
+
 export function buildCoachPromptChips(input: { questions?: string[]; assistantMessage?: string }): string[] {
+  const semanticChips = semanticStrategicChips(input).slice(0, MAX_CHIPS);
+  if (semanticChips.length > 0) return semanticChips;
+
   const candidates = (input.questions ?? [])
     .map(sanitizeCandidate)
     .filter(isValidShortcut)

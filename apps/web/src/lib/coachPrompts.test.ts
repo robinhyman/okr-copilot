@@ -16,6 +16,50 @@ test('buildCoachPromptChips keeps concise shortcuts only', () => {
   assert.deepEqual(chips.sort(), ['Draft now with assumptions', 'Use estimate'].sort());
 });
 
+test('buildCoachPromptChips prioritizes semantic strategic options from coach question context', () => {
+  const chips = buildCoachPromptChips({
+    assistantMessage:
+      'Which strategic reason matters most: competitiveness, time-to-market, reducing delivery cost, or improving customer responsiveness?'
+  });
+
+  // UI currently caps at 3 visible chips.
+  assert.deepEqual(chips, ['Competitiveness', 'Time-to-market', 'Delivery cost']);
+});
+
+test('buildCoachPromptChips semantic variants (adjacent scenarios)', () => {
+  const scenarios = [
+    {
+      name: 'customer + quality ordering',
+      input: {
+        assistantMessage:
+          'Should we focus on improving customer responsiveness first, or should quality be our main strategic reason?'
+      },
+      expected: ['Customer responsiveness', 'Quality']
+    },
+    {
+      name: 'mixed ordering with explicit sequence',
+      input: {
+        assistantMessage:
+          'Do we optimize time-to-market first, then competitiveness, then reduce delivery cost?'
+      },
+      expected: ['Time-to-market', 'Competitiveness', 'Delivery cost']
+    },
+    {
+      name: 'delivery cost + customer responsiveness + quality',
+      input: {
+        assistantMessage:
+          'Is our strongest reason reducing delivery cost while keeping better customer responsiveness and quality?'
+      },
+      expected: ['Delivery cost', 'Customer responsiveness', 'Quality']
+    }
+  ];
+
+  for (const scenario of scenarios) {
+    const chips = buildCoachPromptChips(scenario.input);
+    assert.deepEqual(chips, scenario.expected, `${scenario.name}: expected ${scenario.expected.join(', ')} got ${chips.join(', ')}`);
+  }
+});
+
 test('buildCoachPromptChips adds strategic fallbacks when sanitized list is empty', () => {
   const delivery = buildCoachPromptChips({
     assistantMessage: 'What strategic outcomes matter most for delivery speed this quarter?',
@@ -79,7 +123,7 @@ test('buildCoachPromptChips QA matrix across novice contexts', () => {
       input: {
         questions: ['Draft now?', 'Set timeframe now?', 'Pick guardrail metric']
       },
-      expectedContains: ['Set timeframe now', 'Pick guardrail metric']
+      expectedContains: ['Draft now', 'Set timeframe now', 'Pick guardrail metric']
     }
   ];
 
@@ -89,7 +133,7 @@ test('buildCoachPromptChips QA matrix across novice contexts', () => {
     assert.ok(chips.length <= 3, `${scenario.name}: chips should cap at 3`);
     for (const chip of chips) {
       const wordCount = chip.trim().split(/\s+/).length;
-      assert.ok(wordCount >= 2 && wordCount <= 5, `${scenario.name}: word-count invalid: ${chip}`);
+      assert.ok(wordCount >= 1 && wordCount <= 5, `${scenario.name}: word-count invalid: ${chip}`);
       assert.equal(/[?]$/.test(chip), false, `${scenario.name}: should not end with ? -> ${chip}`);
       assert.equal(/^(what|how|which)\b/i.test(chip) || /^can\s+you\b/i.test(chip), false, `${scenario.name}: coach question stem leaked: ${chip}`);
     }
