@@ -484,7 +484,7 @@ function applyLoopMitigation(input: OkrConversationRequest, result: OkrConversat
   if (loopDetected && result.mode === 'questions' && missingFields[0]) {
     return {
       ...result,
-      assistantMessage: normalizeAssistantMessage(`Here’s what I heard so far. ${missingFieldQuestion(missingFields[0])} Choose one: A) quick estimate B) exact metric C) draft with assumptions now.`),
+      assistantMessage: normalizeAssistantMessage(`Here’s what I heard so far. ${missingFieldQuestion(missingFields[0])} If you prefer, share a quick estimate, give the exact metric, or I can draft now with clear assumptions.`),
       metadata: {
         ...result.metadata,
         loopDetected: true,
