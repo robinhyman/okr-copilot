@@ -635,6 +635,34 @@ class DeterministicDraftProvider {
     const shouldProbe = missingChecklist.length > 0;
 
     if (shouldProbe) {
+      const userTurns = safeMessages.filter((m) => m.role === 'user').length;
+      const lastThreeUserMessages = safeMessages.filter((m) => m.role === 'user').slice(-3).map((m) => normalizeSemanticText(m.content));
+      const repeatedUserInput = lastThreeUserMessages.length >= 2 && new Set(lastThreeUserMessages).size <= 2;
+      const finalizeNow = isFinalizeNowIntent(instruction);
+      const shouldDraftWithAssumptions = finalizeNow || userTurns >= 6 || (userTurns >= 4 && repeatedUserInput);
+
+      if (shouldDraftWithAssumptions) {
+        const draftWithAssumptions = buildDraftWithAssumptions(revisedDraft, coachingContext);
+        return {
+          assistantMessage: normalizeAssistantMessage('I drafted a first usable OKR with explicit assumptions so you can refine from something concrete.'),
+          mode: 'refine',
+          questions: [],
+          rationale: [
+            'Used assumption-based draft because key context remained incomplete after multiple turns.',
+            `Missing context to confirm next: ${missingChecklist.slice(0, 2).join(', ') || 'none'}.`
+          ],
+          coachingContext,
+          missingContext,
+          draft: draftWithAssumptions,
+          metadata: {
+            source: 'fallback',
+            provider: 'deterministic',
+            reason: 'assumption_draft_fallback',
+            durationMs: 0
+          }
+        };
+      }
+
       const questions = missingChecklist.map(missingFieldQuestion).slice(0, 2);
       return {
         assistantMessage: normalizeAssistantMessage(ensureNonLoopingAssistantMessage({

@@ -736,7 +736,7 @@ test('leader rollup returns api-sourced team display and owner labels', async ()
   assert.equal(typeof product?.ownerLabel, 'string');
 });
 
-test('finalize-now intent returns draft with assumptions and compliance metadata', async () => {
+test('finalize-now intent returns assumption-based draft in simplified flow', async () => {
   const priorKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
 
@@ -762,10 +762,10 @@ test('finalize-now intent returns draft with assumptions and compliance metadata
 
     assert.equal(turn.status, 200);
     assert.equal(turn.body?.mode, 'refine');
-    assert.equal(turn.body?.metadata?.draftOnRequestCompliant, true);
-    assert.ok(Array.isArray(turn.body?.metadata?.assumptions));
+    assert.ok(['missing_openai_api_key', 'llm_failed', 'llm_timeout', 'assumption_draft_fallback'].includes(String(turn.body?.metadata?.reason || '')));
     assert.ok(Array.isArray(turn.body?.draft?.keyResults));
     assert.equal(turn.body?.draft?.keyResults?.length, 3);
+    assert.ok((turn.body?.assistantMessage || '').toLowerCase().includes('assum'));
   } finally {
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = priorKey;
@@ -804,7 +804,7 @@ test('save route blocks generic draft fallback when transcript has numeric evide
   assert.equal(saveRes.body?.qualityGuards?.salvageApplied, true);
 });
 
-test('chat metadata includes loop risk diagnostics when prompts semantically repeat', async () => {
+test('chat no longer injects loop diagnostics metadata in simplified flow', async () => {
   const priorKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
 
@@ -836,8 +836,9 @@ test('chat metadata includes loop risk diagnostics when prompts semantically rep
       });
 
     assert.equal(turn2.status, 200);
-    assert.equal(typeof turn2.body?.metadata?.loopRiskScore, 'number');
-    assert.ok(Array.isArray(turn2.body?.metadata?.loopSignals));
+    assert.equal(turn2.body?.metadata?.loopRiskScore, undefined);
+    assert.equal(turn2.body?.metadata?.loopSignals, undefined);
+    assert.ok(typeof turn2.body?.assistantMessage === 'string' && turn2.body.assistantMessage.length > 0);
   } finally {
     if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = priorKey;
