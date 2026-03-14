@@ -682,6 +682,36 @@ test('coach anti-loop guard prevents consecutive duplicate assistant prompts', a
   }
 });
 
+test('novice first-turn prompt returns guided shortcut chips', async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  try {
+    const app = createApp();
+    const headers = { ...authHeaders, 'x-auth-user-id': 'mgr_product', 'x-auth-team-id': 'team_product' };
+
+    const sessionRes = await request(app)
+      .post('/api/okr-drafts/sessions')
+      .set(headers)
+      .send({ title: 'Novice-guided draft' });
+
+    const draftId = Number(sessionRes.body?.session?.id);
+
+    const chatRes = await request(app)
+      .post(`/api/okr-drafts/${draftId}/chat`)
+      .set(headers)
+      .send({ messages: [{ role: 'user', content: 'I am new to OKRs and not sure where to start.' }] });
+
+    assert.equal(chatRes.status, 200);
+    assert.ok(['novice_guided_entry', 'missing_openai_api_key', 'llm_failed', 'llm_timeout'].includes(String(chatRes.body?.metadata?.reason || '')));
+    assert.ok(Array.isArray(chatRes.body?.questions));
+    assert.ok((chatRes.body?.questions ?? []).every((q: string) => q.trim().split(/\s+/).length <= 5));
+  } finally {
+    if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorKey;
+  }
+});
+
 test('missing-context prompts are explicit and field-specific', async () => {
   const priorKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;

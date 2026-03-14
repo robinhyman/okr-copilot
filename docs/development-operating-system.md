@@ -80,3 +80,13 @@ For every new increment request in this repo, explicitly reference:
 - `docs/product-increment-delivery-standard.md`
 
 If either is not referenced in the working notes/handover, the increment is incomplete.
+
+## 8) Coaching-flow iteration guardrails (when improving coach quality)
+
+For any coach-flow quality iteration pack:
+- run multiple realistic novice scenarios from different business contexts (not one persona only),
+- keep deterministic logic boundary-first (avoid heavy mid-conversation state machines),
+- if suggestion chips are used, keep them to concise user-input shortcuts (few words, no auto-send, no long prose duplicates),
+- include mandatory per-iteration retrospective (`worked / didn’t / changes adopted`),
+- apply process fixes from retros into docs when repeated issues are found,
+- maintain local demo readiness (health endpoint up + seeded non-empty demo data).

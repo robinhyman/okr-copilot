@@ -247,6 +247,22 @@ function missingFieldQuestion(field: RequiredContextField): string {
   return 'What timeframe should we commit this OKR to?';
 }
 
+function missingFieldShortcut(field: RequiredContextField): string {
+  if (field === 'outcome') return 'Share outcome';
+  if (field === 'strategicWhy') return 'Share business why';
+  if (field === 'baseline') return 'Share baseline';
+  if (field === 'target') return 'Share target';
+  if (field === 'constraints') return 'Share constraints';
+  return 'Set timeframe';
+}
+
+function isNoviceFirstTurn(messages: OkrConversationMessage[]): boolean {
+  const userMessages = messages.filter((m) => m.role === 'user');
+  if (userMessages.length !== 1) return false;
+  const text = userMessages[0].content.toLowerCase();
+  return /new to okr|first time|not sure|help me start|where do i start|never written okr/.test(text);
+}
+
 function normalizeMessageKey(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -384,10 +400,16 @@ function buildDraftWithAssumptions(baseDraft: OkrDraft, ctx: OkrCoachingContext)
   const baselineNum = parseBaselineNumber(ctx.baseline || '0', 0);
   const unit = parseUnit(`${ctx.baseline || ''} ${ctx.outcome || ''}`);
 
+  const laggingTarget = Math.round((baselineNum || 10) * 1.2);
+  const leadingCurrent = Math.max(1, Math.round((baselineNum || 10) * 0.8));
+  const leadingTarget = Math.max(2, Math.round((baselineNum || 10) * 1.05));
+  const guardrailCurrent = Math.max(1, Math.round((baselineNum || 10) * 0.3));
+  const guardrailTarget = Math.max(1, Math.round((baselineNum || 10) * 0.2));
+
   const krs = [
-    { title: `Lagging: Increase core outcome from ${baselineNum} to ${Math.round((baselineNum || 10) * 1.2)} by ${timeframe}`, currentValue: baselineNum, targetValue: Math.round((baselineNum || 10) * 1.2), unit },
-    { title: `Leading: Improve leading indicator from ${Math.max(1, Math.round((baselineNum || 10) * 0.8))} to ${Math.max(2, Math.round((baselineNum || 10) * 1.05))} by ${timeframe}`, currentValue: Math.max(1, Math.round((baselineNum || 10) * 0.8)), targetValue: Math.max(2, Math.round((baselineNum || 10) * 1.05)), unit },
-    { title: `Guardrail: Keep quality risk metric from ${Math.max(1, Math.round((baselineNum || 10) * 0.3))} to <= ${Math.max(1, Math.round((baselineNum || 10) * 0.35))} by ${timeframe}`, currentValue: Math.max(1, Math.round((baselineNum || 10) * 0.3)), targetValue: Math.max(1, Math.round((baselineNum || 10) * 0.35)), unit }
+    { title: `Increase primary outcome from ${baselineNum} to ${laggingTarget}`, currentValue: baselineNum, targetValue: laggingTarget, unit },
+    { title: `Increase leading signal from ${leadingCurrent} to ${leadingTarget}`, currentValue: leadingCurrent, targetValue: leadingTarget, unit },
+    { title: `Reduce quality risk from ${guardrailCurrent} to ${guardrailTarget}`, currentValue: guardrailCurrent, targetValue: guardrailTarget, unit }
   ];
 
   return normalizeDraftShape({ objective, timeframe, keyResults: krs }, timeframe);
@@ -640,6 +662,29 @@ class DeterministicDraftProvider {
       const repeatedUserInput = lastThreeUserMessages.length >= 2 && new Set(lastThreeUserMessages).size <= 2;
       const finalizeNow = isFinalizeNowIntent(instruction);
       const shouldDraftWithAssumptions = finalizeNow || userTurns >= 6 || (userTurns >= 4 && repeatedUserInput);
+
+      if (isNoviceFirstTurn(safeMessages)) {
+        const firstMissing = missingChecklist[0] ?? 'outcome';
+        const secondMissing = missingChecklist[1];
+        return {
+          assistantMessage: normalizeAssistantMessage(`${missingFieldQuestion(firstMissing)} Keep it simple; one sentence is enough.`),
+          mode: 'questions',
+          questions: [
+            missingFieldShortcut(firstMissing),
+            secondMissing ? missingFieldShortcut(secondMissing) : 'Draft now'
+          ],
+          rationale: ['First-time user detected; switched to guided shortcuts to reduce blank-page friction.'],
+          coachingContext,
+          missingContext,
+          draft: normalizeDraftShape(revisedDraft, timeframe),
+          metadata: {
+            source: 'fallback',
+            provider: 'deterministic',
+            reason: 'novice_guided_entry',
+            durationMs: 0
+          }
+        };
+      }
 
       if (shouldDraftWithAssumptions) {
         const draftWithAssumptions = buildDraftWithAssumptions(revisedDraft, coachingContext);

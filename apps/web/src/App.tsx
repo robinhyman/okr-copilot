@@ -3,6 +3,7 @@ import { getRoutePath, type RoutePath } from './lib/ui';
 import { deriveCoachUiState, publishButtonEnabled } from './lib/conversationFlow';
 import { buildGroupedOverviewMetrics } from './lib/overviewMetrics';
 import { OverviewDashboard } from './components/OverviewDashboard';
+import { buildCoachPromptChips } from './lib/coachPrompts';
 
 
 type ApiOkr = {
@@ -405,7 +406,12 @@ export function App() {
           reason: becameReady ? 'threshold_met' : 'explicit_generate_action'
         });
       }
-      setCoachPrompts(Array.isArray(response.questions) ? response.questions : []);
+      setCoachPrompts(
+        buildCoachPromptChips({
+          questions: Array.isArray(response.questions) ? response.questions : [],
+          assistantMessage: response.assistantMessage || ''
+        })
+      );
       setChatMessages((prev) => [
         ...prev,
         {
@@ -682,6 +688,28 @@ export function App() {
                           </li>
                         )}
                       </ul>
+                      {coachPrompts.length > 0 ? (
+                        <div className="coach-prompt-chips" aria-label="Suggested replies">
+                          {coachPrompts.slice(0, 3).map((prompt, idx) => (
+                            <button
+                              key={`${prompt}-${idx}`}
+                              type="button"
+                              className="secondary"
+                              disabled={isCoachThinking || isStartingCoachSession}
+                              onClick={() => {
+                                void trackUiEvent('coach_prompt_chip_clicked', {
+                                  flow: currentMode,
+                                  prompt_index: idx,
+                                  prompt_length: prompt.length
+                                });
+                                void sendChatTurn(prompt);
+                              }}
+                            >
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="row">
                         <textarea
                           value={chatInput}
